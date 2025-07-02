@@ -1,7 +1,7 @@
 package shardmaster
 
-import "../labrpc"
-import "../raft"
+import "mitds/labrpc"
+import "mitds/raft"
 import "testing"
 import "os"
 
