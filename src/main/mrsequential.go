@@ -67,13 +67,18 @@ func main() {
 	//
 	i := 0
 	for i < len(intermediate) {
-		j := i + 1
-		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
-			j++
-		}
+		//j := i + 1
+		//for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+		//	j++
+		//}
+		//values := []string{}
+		//for k := i; k < j; k++ {
+		//	values = append(values, intermediate[k].Value)
+		//}
 		values := []string{}
-		for k := i; k < j; k++ {
-			values = append(values, intermediate[k].Value)
+		j := i
+		for ; j < len(intermediate) && intermediate[j].Key == intermediate[i].Key; j++ {
+			values = append(values, intermediate[j].Value)
 		}
 		output := reducef(intermediate[i].Key, values)
 
