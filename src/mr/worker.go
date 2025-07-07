@@ -1,71 +1,185 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
+import (
+	"encoding/json"
+	"fmt"
+	"hash/fnv"
+	"io/ioutil"
+	"log"
+	"net/rpc"
+	"os"
+	"sort"
+	"strconv"
+	"time"
+)
 
+type ByKey []KeyValue
 
-//
+func (b ByKey) Len() int           { return len(b) }
+func (b ByKey) Swap(i, j int)      { b[i], b[j] = b[j], b[i] }
+func (b ByKey) Less(i, j int) bool { return b[i].Key < b[j].Key }
+
 // Map functions return a slice of KeyValue.
-//
 type KeyValue struct {
 	Key   string
 	Value string
 }
 
-//
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
-//
 func ihash(key string) int {
 	h := fnv.New32a()
 	h.Write([]byte(key))
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
-//
-// main/mrworker.go calls this function.
-//
-func Worker(mapf func(string, string) []KeyValue,
-	reducef func(string, []string) string) {
-
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the master.
-	// CallExample()
-
+func requestTask() RequestTaskReply {
+	args, reply := RequestTaskArgs{}, RequestTaskReply{}
+	ok := call("Master.AssignTask", &args, &reply)
+	if !ok {
+		fmt.Println("call Master.AssignTask failed")
+	}
+	return reply
 }
 
-//
+func reportTaskFinished(taskId int) {
+	args, reply := ReportTaskArgs{}, ReportTaskReply{}
+	ok := call("Master.UpdateTaskFinished", &args, &reply)
+	if !ok {
+		fmt.Println("call Master.UpdateTaskFinished failed")
+	}
+}
+
+// main/mrworker.go calls this function.
+func Worker(mapf func(string, string) []KeyValue,
+	reducef func(string, []string) string) {
+	loop := true
+	for loop {
+		reply := requestTask()
+		task := &reply.Task
+		switch reply.RequestTaskFlag {
+		case TaskAssigned:
+			switch task.TaskType {
+			case MapTask:
+				fmt.Printf("performing map task %d %v\n", task.TaskId, task.InputFiles)
+				performMapTask(mapf, task)
+				reportTaskFinished(task.TaskId)
+			case ReduceTask:
+				fmt.Printf("performing reduce task %d %v\n", task.TaskId, task.InputFiles)
+				performReduceTask(reducef, task)
+				reportTaskFinished(task.TaskId)
+			}
+		case WaitAndTryAgain:
+			time.Sleep(time.Second)
+		case FinishedAndExit:
+			loop = false
+		}
+	}
+}
+
+func performReduceTask(reducef func(string, []string) string, task *Task) {
+	intermediate := shuffle(task.InputFiles)
+
+	dir, _ := os.Getwd()
+	tmpfile, err := os.CreateTemp(dir, "mr-tmpfile")
+	if err != nil {
+		log.Fatal("can not create mr-tmpfile")
+	}
+
+	i := 0
+	for i < len(intermediate) {
+		values := []string{}
+		j := i
+		for ; j < len(intermediate) && intermediate[i].Key == intermediate[j].Key; j++ {
+			values = append(values, intermediate[j].Value)
+		}
+		res := reducef(intermediate[i].Key, values)
+		fmt.Fprintf(tmpfile, "%v %v\n", intermediate[i].Key, res)
+		i = j
+	}
+	tmpfile.Close()
+
+	filename := "mr-out-" + strconv.Itoa(task.ReduceKth)
+	os.Rename(dir+tmpfile.Name(), filename)
+}
+
+func shuffle(files []string) []KeyValue {
+	kva := []KeyValue{}
+	for _, filename := range files {
+		file, err := os.Open(filename)
+		if err != nil {
+			log.Fatal("can not open %s", filename)
+		}
+
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			err := dec.Decode(&kv)
+			if err != nil {
+				break
+			}
+			kva = append(kva, kv)
+		}
+		file.Close()
+	}
+	sort.Sort(ByKey(kva))
+
+	return kva
+}
+
+func performMapTask(mapf func(string, string) []KeyValue, task *Task) {
+	intermediate := []KeyValue{}
+	for _, filename := range task.InputFiles {
+		file, err := os.Open(filename)
+		if err != nil {
+			log.Fatal("can not open %s", filename)
+		}
+		content, err := ioutil.ReadAll(file)
+		if err != nil {
+			log.Fatal("can not read %s", filename)
+		}
+		file.Close()
+		kva := mapf(filename, string(content))
+		intermediate = append(intermediate, kva...)
+	}
+
+	for i := 0; i < task.ReduceNum; i++ {
+		midFileName := "mr-" + strconv.Itoa(task.TaskId) + "-" + strconv.Itoa(i)
+		midFile, _ := os.Create(midFileName)
+		enc := json.NewEncoder(midFile)
+		for _, kv := range intermediate {
+			if ihash(kv.Key)%task.ReduceNum == i {
+				enc.Encode(&kv)
+			}
+		}
+		midFile.Close()
+	}
+}
+
 // example function to show how to make an RPC call to the master.
 //
 // the RPC argument and reply types are defined in rpc.go.
+//func CallExample() {
 //
-func CallExample() {
-
-	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
-	// declare a reply structure.
-	reply := ExampleReply{}
-
-	// send the RPC request, wait for the reply.
-	call("Master.Example", &args, &reply)
-
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
-}
-
+//	// declare an argument structure.
+//	args := ExampleArgs{}
 //
+//	// fill in the argument(s).
+//	args.X = 99
+//
+//	// declare a reply structure.
+//	reply := ExampleReply{}
+//
+//	// send the RPC request, wait for the reply.
+//	call("Master.Example", &args, &reply)
+//
+//	// reply.Y should be 100.
+//	fmt.Printf("reply.Y %v\n", reply.Y)
+//}
+
 // send an RPC request to the master, wait for the response.
 // usually returns true.
 // returns false if something goes wrong.
-//
 func call(rpcname string, args interface{}, reply interface{}) bool {
 	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	sockname := masterSock()
