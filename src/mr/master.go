@@ -192,10 +192,10 @@ func (m *Master) checkTaskDone(taskType TaskType, doneNum int) bool {
 // an example RPC handler.
 //
 // the RPC argument and reply types are defined in rpc.go.
-//func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
-//	reply.Y = args.X + 1
-//	return nil
-//}
+func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
+	reply.Y = args.X + 1
+	return nil
+}
 
 // start a thread that listens for RPCs from worker.go
 func (m *Master) server() {
