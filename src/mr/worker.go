@@ -84,6 +84,7 @@ func performReduceTask(reducef func(string, []string) string, task *Task) {
 
 	dir, _ := os.Getwd()
 	tmpfile, err := os.CreateTemp(dir, "mr-tmp-"+strconv.Itoa(task.ReduceKth))
+	fmt.Printf("%s\t%s\n", dir, tmpfile.Name())
 	if err != nil {
 		log.Fatal("can not create mr-tmpfile")
 	}
@@ -101,8 +102,8 @@ func performReduceTask(reducef func(string, []string) string, task *Task) {
 	}
 	tmpfile.Close()
 
-	filename := "mr-out-" + strconv.Itoa(task.ReduceKth)
-	os.Rename(dir+tmpfile.Name(), filename)
+	filename := dir + "/mr-out-" + strconv.Itoa(task.ReduceKth)
+	os.Rename(tmpfile.Name(), filename)
 }
 
 func shuffle(files []string) []KeyValue {

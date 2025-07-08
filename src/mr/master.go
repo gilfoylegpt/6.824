@@ -87,11 +87,11 @@ func (m *Master) AssignTask(args *RequestTaskArgs, reply *RequestTaskReply) erro
 		if len(m.MapTasks) > 0 {
 			task := <-m.MapTasks
 			if task.TaskState == Waiting {
-				reply.RequestTaskFlag = TaskAssigned
-				reply.Task = *task
 				task.TaskState = Working
 				task.StartTime = time.Now()
 				m.TaskMap[task.TaskId] = task
+				reply.RequestTaskFlag = TaskAssigned
+				reply.Task = *task
 				fmt.Printf("map task %d %v assigned\n", task.TaskId, task.InputFiles)
 			}
 		} else {
@@ -104,11 +104,11 @@ func (m *Master) AssignTask(args *RequestTaskArgs, reply *RequestTaskReply) erro
 		if len(m.ReduceTasks) > 0 {
 			task := <-m.ReduceTasks
 			if task.TaskState == Waiting {
-				reply.RequestTaskFlag = TaskAssigned
-				reply.Task = *task
 				task.TaskState = Working
 				task.StartTime = time.Now()
 				m.TaskMap[task.TaskId] = task
+				reply.RequestTaskFlag = TaskAssigned
+				reply.Task = *task
 				fmt.Printf("reduce task %d %v assigned\n", task.TaskId, task.InputFiles)
 			}
 		} else {
