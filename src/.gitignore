@@ -7,3 +7,7 @@ mrtmp.*
 /kvpaxos/x.txt
 *.so
 mr-out*
+main/mr-tmp
+main/mrmaster
+main/mrsequential
+main/mrworker
