@@ -44,6 +44,7 @@ func requestTask() RequestTaskReply {
 
 func reportTaskFinished(taskId int) {
 	args, reply := ReportTaskArgs{}, ReportTaskReply{}
+	args.TaskId = taskId
 	ok := call("Master.UpdateTaskFinished", &args, &reply)
 	if !ok {
 		fmt.Println("call Master.UpdateTaskFinished failed")
