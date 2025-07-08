@@ -86,12 +86,14 @@ func (m *Master) AssignTask(args *RequestTaskArgs, reply *RequestTaskReply) erro
 	case MapPhase:
 		if len(m.MapTasks) > 0 {
 			task := <-m.MapTasks
-			reply.RequestTaskFlag = TaskAssigned
-			reply.Task = *task
-			task.TaskState = Working
-			task.StartTime = time.Now()
-			m.TaskMap[task.TaskId] = task
-			fmt.Printf("map task %d %v assigned\n", task.TaskId, task.InputFiles)
+			if task.TaskState == Waiting {
+				reply.RequestTaskFlag = TaskAssigned
+				reply.Task = *task
+				task.TaskState = Working
+				task.StartTime = time.Now()
+				m.TaskMap[task.TaskId] = task
+				fmt.Printf("map task %d %v assigned\n", task.TaskId, task.InputFiles)
+			}
 		} else {
 			reply.RequestTaskFlag = WaitAndTryAgain
 			if m.checkTaskDone(MapTask, m.MapperNum) {
@@ -101,12 +103,14 @@ func (m *Master) AssignTask(args *RequestTaskArgs, reply *RequestTaskReply) erro
 	case ReducePhase:
 		if len(m.ReduceTasks) > 0 {
 			task := <-m.ReduceTasks
-			reply.RequestTaskFlag = TaskAssigned
-			reply.Task = *task
-			task.TaskState = Working
-			task.StartTime = time.Now()
-			m.TaskMap[task.TaskId] = task
-			fmt.Printf("reduce task %d %v assigned\n", task.TaskId, task.InputFiles)
+			if task.TaskState == Waiting {
+				reply.RequestTaskFlag = TaskAssigned
+				reply.Task = *task
+				task.TaskState = Working
+				task.StartTime = time.Now()
+				m.TaskMap[task.TaskId] = task
+				fmt.Printf("reduce task %d %v assigned\n", task.TaskId, task.InputFiles)
+			}
 		} else {
 			reply.RequestTaskFlag = WaitAndTryAgain
 			if m.checkTaskDone(ReduceTask, m.ReducerNum) {
@@ -215,8 +219,8 @@ func (m *Master) crashHandler() {
 	for {
 		time.Sleep(time.Second)
 		mu.Lock()
-		defer mu.Unlock()
 		if m.CurrentPhase == AllDone {
+			mu.Unlock()
 			break
 		}
 
@@ -236,6 +240,7 @@ func (m *Master) crashHandler() {
 				delete(m.TaskMap, task.TaskId)
 			}
 		}
+		mu.Unlock()
 	}
 }
 
