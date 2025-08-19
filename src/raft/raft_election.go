@@ -1,5 +1,9 @@
 package raft
 
+func (rf *Raft) runForElection() {
+
+}
+
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {

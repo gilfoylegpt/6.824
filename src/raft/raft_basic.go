@@ -62,8 +62,10 @@ type Raft struct {
 
 	state  ServerState
 	hbTime time.Duration
-	timer  time.Timer
+	timer  *time.Timer
 	ready  bool
+
+	applyCh chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -152,4 +154,15 @@ func (rf *Raft) Kill() {
 func (rf *Raft) killed() bool {
 	z := atomic.LoadInt32(&rf.dead)
 	return z == 1
+}
+
+func (rf *Raft) status() (ServerState, int) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.state, rf.currentTerm
+}
+
+func (rf *Raft) resetTimer() {
+	rf.timer.Stop()
+	rf.timer.Reset(time.Duration(getRandMS(300, 500)) * time.Millisecond)
 }

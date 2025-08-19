@@ -17,7 +17,11 @@ package raft
 //   in the same server.
 //
 
-import "mitds/labrpc"
+import (
+	"mitds/labrpc"
+	"sync"
+	"time"
+)
 
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
@@ -58,9 +62,51 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	var mu sync.Mutex
+	rf.mu = mu
+	rf.dead = 0
+	rf.currentTerm = 0
+	rf.voteFor = -1
+	rf.logEntries = []LogEntry{{Term: 0, Index: 0}}
+	rf.commitedIndex = 0
+	rf.lastAppliedIndex = 0
+	rf.state = Follower
+	rf.hbTime = 100 * time.Millisecond
+	rf.timer = time.NewTimer(time.Duration(getRandMS(300, 500)) * time.Millisecond)
+	rf.ready = false
+	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.persist()
+	DPrintf("[BOOT INFO]: raft server %d start", rf.me)
+
+	go rf.handleTimeout()
 
 	return rf
+}
+
+func (rf *Raft) handleTimeout() {
+	for !rf.killed() {
+		select {
+		case <-rf.timer.C:
+			state, _ := rf.status()
+			switch state {
+			case Follower:
+				rf.resetTimer()
+				go rf.runForElection()
+			case Candidate:
+				rf.resetTimer()
+				rf.mu.Lock()
+				if rf.ready {
+					go rf.runForElection()
+				} else {
+					rf.ready = true
+				}
+				rf.mu.Unlock()
+			case Leader:
+				return
+			}
+		}
+	}
 }
