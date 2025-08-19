@@ -129,7 +129,7 @@ func (rf *Raft) readPersist(data []byte) {
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&voteFor) != nil ||
 		d.Decode(&logEntries) != nil {
-		DPrintf("[PERSIST ERROR]: raft server %d readPersist error", rf.me)
+		DPrintf("[PERSIST ERROR]: raft server %d readPersist error\n", rf.me)
 	} else {
 		rf.currentTerm = currentTerm
 		rf.voteFor = voteFor
@@ -165,4 +165,25 @@ func (rf *Raft) status() (ServerState, int) {
 func (rf *Raft) resetTimer() {
 	rf.timer.Stop()
 	rf.timer.Reset(time.Duration(getRandMS(300, 500)) * time.Millisecond)
+}
+
+func (rf *Raft) checkOutdated(state ServerState, term int) bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if (state != -1 && state != rf.state) || (term != -1 && term != rf.currentTerm) {
+		return true
+	}
+
+	return false
+}
+
+func (rf *Raft) checkQuitFollower(term int) bool {
+	if rf.currentTerm < term {
+		rf.state = Follower
+		rf.currentTerm = term
+		rf.voteFor = -1
+		rf.persist()
+		return true
+	}
+	return false
 }

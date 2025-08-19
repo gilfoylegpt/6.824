@@ -79,7 +79,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	rf.persist()
-	DPrintf("[BOOT INFO]: raft server %d start", rf.me)
+	DPrintf("[BOOT INFO]: raft server %d start\n", rf.me)
 
 	go rf.handleTimeout()
 

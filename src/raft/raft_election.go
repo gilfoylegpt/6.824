@@ -1,24 +1,186 @@
 package raft
 
-func (rf *Raft) runForElection() {
+import (
+	"sync"
+	"time"
+)
 
+func (rf *Raft) runForElection() {
+	term := rf.convert2Candidate()
+
+	votes := 1
+	finished := 1
+	var voteMutex sync.Mutex
+	cond := sync.NewCond(&voteMutex)
+
+	for i, _ := range rf.peers {
+		if rf.killed() {
+			return
+		}
+
+		if rf.checkOutdated(Candidate, term) {
+			return
+		}
+
+		if i == rf.me {
+			continue
+		}
+
+		go func(ii int) {
+			rf.mu.Lock()
+			args := &RequestVoteArgs{
+				Term:              term,
+				CandidateId:       rf.me,
+				LastLogEntryTerm:  rf.logEntries[len(rf.logEntries)-1].Term,
+				LastLogEntryIndex: rf.logEntries[len(rf.logEntries)-1].Index,
+			}
+			rf.mu.Unlock()
+			reply := &RequestVoteReply{}
+			ok := rf.sendRequestVote(ii, args, reply)
+			if !ok {
+				DPrintf("[RPC FAILED]: candidate %d request vote from %d failed\n", rf.me, ii)
+				return
+			}
+
+			if rf.checkOutdated(Candidate, term) {
+				return
+			}
+
+			rf.mu.Lock()
+			quit := rf.checkQuitFollower(reply.Term)
+			if quit {
+				rf.mu.Unlock()
+				rf.resetTimer()
+				return
+			}
+			rf.mu.Unlock()
+
+			voteMutex.Lock()
+			if reply.VoteGranted {
+				DPrintf("[ELECTION INFO]: candidate %d got vote from %d\n", rf.me, ii)
+				votes++
+			}
+			finished++
+			voteMutex.Unlock()
+			cond.Broadcast()
+		}(i)
+	}
+
+	totalNum := len(rf.peers)
+	majorityNum := totalNum/2 + 1
+	voteMutex.Lock()
+	for votes < majorityNum && finished != totalNum {
+		cond.Wait()
+		if rf.checkOutdated(Candidate, term) {
+			voteMutex.Unlock()
+			return
+		}
+	}
+
+	if votes >= majorityNum {
+		rf.convert2Leader()
+	} else {
+		DPrintf("[ELECTION INFO]: candidate %d failed in the election with term %d\n", rf.me, term)
+	}
+	voteMutex.Unlock()
+}
+
+func (rf *Raft) convert2Leader() {
+	rf.mu.Lock()
+	rf.state = Leader
+	DPrintf("[ELECTION INFO]: candidate %d became leader with term %d\n", rf.me, rf.currentTerm)
+	term := rf.currentTerm
+	rf.nextIndex = make([]int, len(rf.peers))
+	for i := 0; i < len(rf.peers); i++ {
+		rf.nextIndex[i] = rf.logEntries[len(rf.logEntries)-1].Index + 1
+	}
+	rf.matchIndex = make([]int, len(rf.peers))
+	for i := 0; i < len(rf.peers); i++ {
+		rf.matchIndex[i] = 0
+	}
+	rf.mu.Unlock()
+
+	go func() {
+		for !rf.killed() {
+			if rf.checkOutdated(Leader, term) {
+				return
+			}
+			go rf.leaderAppendEntries()
+			time.Sleep(rf.hbTime)
+		}
+	}()
+}
+
+func (rf *Raft) convert2Candidate() int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.state = Candidate
+	rf.currentTerm++
+	rf.voteFor = rf.me
+	rf.persist()
+	DPrintf("[ELECTION INFO]: rafer server %d became candidate, currentTerm %d\n", rf.me, rf.currentTerm)
+	rf.ready = false
+	return rf.currentTerm
 }
 
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	Term              int
+	CandidateId       int
+	LastLogEntryIndex int
+	LastLogEntryTerm  int
 }
 
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 type RequestVoteReply struct {
 	// Your data here (2A).
+	VoteGranted bool
+	Term        int
 }
 
 // example RequestVote RPC handler.
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = false
+		return
+	}
+
+	state := rf.state
+	flag := rf.checkQuitFollower(args.Term)
+	// when candidate or leader quit into follower
+	// initialize to follower
+	if state != Follower && flag {
+		rf.resetTimer()
+		if state == Leader {
+			go rf.handleTimeout()
+		}
+	}
+
+	uptodate := false
+	lastLog := rf.logEntries[len(rf.logEntries)-1]
+	if (args.LastLogEntryTerm > lastLog.Term) || (args.LastLogEntryTerm == lastLog.Term && args.LastLogEntryIndex >= lastLog.Index) {
+		uptodate = true
+	}
+
+	// For follower, if it vote for other candidate, it should reset its timer
+	if (rf.voteFor == -1 || rf.voteFor == args.CandidateId) && uptodate {
+		rf.voteFor = args.CandidateId
+		rf.persist()
+		rf.resetTimer()
+		reply.VoteGranted = true
+	} else {
+		// for follower not vote or candidate or leader
+		// just leave timer alone
+		reply.VoteGranted = false
+	}
+	reply.Term = rf.currentTerm
 }
 
 // example code to send a RequestVote RPC to a server.
