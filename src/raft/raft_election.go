@@ -38,7 +38,7 @@ func (rf *Raft) runForElection() {
 			reply := &RequestVoteReply{}
 			ok := rf.sendRequestVote(ii, args, reply)
 			if !ok {
-				DPrintf("[RPC FAILED]: candidate %d request vote from %d failed\n", rf.me, ii)
+				//DPrintf("[RPC FAILED]: candidate %d request vote from %d failed\n", rf.me, ii)
 				return
 			}
 
@@ -79,7 +79,7 @@ func (rf *Raft) runForElection() {
 	if votes >= majorityNum {
 		rf.convert2Leader()
 	} else {
-		DPrintf("[ELECTION INFO]: candidate %d failed in the election with term %d\n", rf.me, term)
+		//DPrintf("[ELECTION INFO]: candidate %d failed in the election with term %d\n", rf.me, term)
 	}
 	voteMutex.Unlock()
 }

@@ -44,7 +44,7 @@ func (rf *Raft) leaderAppendEntries() {
 				rf.me, ii, term, args.PreLogIndex, len(args.LogEntries), args.LeaderCommitIndex)
 			ok := rf.sendAppendEntries(ii, args, reply)
 			if !ok {
-				DPrintf("[RPC FAILED]: Leader %d Append Entries to server %d Failed\n", rf.me, ii)
+				//DPrintf("[RPC FAILED]: Leader %d Append Entries to server %d Failed\n", rf.me, ii)
 				return
 			}
 
@@ -172,7 +172,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 
 		if args.LeaderCommitIndex > rf.commitedIndex {
-			rf.commitedIndex = max(args.LeaderCommitIndex, rf.logEntries[len(rf.logEntries)-1].Index)
+			rf.commitedIndex = min(args.LeaderCommitIndex, rf.logEntries[len(rf.logEntries)-1].Index)
 		}
 		reply.Term = rf.currentTerm
 		reply.Success = true
