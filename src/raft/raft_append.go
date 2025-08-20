@@ -160,6 +160,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		for i, entry := range args.LogEntries {
 			if args.PreLogIndex+1+i > rf.logEntries[len(rf.logEntries)-1].Index || rf.logEntries[args.PreLogIndex+1+i].Term != entry.Term {
 				misMatchIdx = args.PreLogIndex + 1 + i
+				break
 			}
 		}
 
@@ -167,8 +168,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			args.LogEntries = args.LogEntries[misMatchIdx-args.PreLogIndex-1:]
 			rf.logEntries = rf.logEntries[:misMatchIdx]
 			rf.logEntries = append(rf.logEntries, args.LogEntries...)
+			rf.persist()
 		}
-		rf.persist()
 
 		if args.LeaderCommitIndex > rf.commitedIndex {
 			rf.commitedIndex = max(args.LeaderCommitIndex, rf.logEntries[len(rf.logEntries)-1].Index)

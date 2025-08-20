@@ -41,7 +41,24 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	isLeader := true
 
 	// Your code here (2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	term = rf.currentTerm
+	isLeader = rf.state == Leader
+	index = rf.logEntries[len(rf.logEntries)-1].Index + 1
+	if !isLeader {
+		return index, term, isLeader
+	}
 
+	entry := LogEntry{
+		Command: command,
+		Index:   index,
+		Term:    term,
+	}
+	DPrintf("[APPEND INFO]: client send command %v to leader %d\n", command, rf.me)
+	rf.logEntries = append(rf.logEntries, entry)
+	rf.persist()
+	go rf.leaderAppendEntries()
 	return index, term, isLeader
 }
 
@@ -82,8 +99,33 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	DPrintf("[BOOT INFO]: raft server %d start\n", rf.me)
 
 	go rf.handleTimeout()
+	go rf.applier()
 
 	return rf
+}
+
+func (rf *Raft) applier() {
+	for !rf.killed() {
+		rf.mu.Lock()
+		msgs := []ApplyMsg{}
+		for rf.lastAppliedIndex < rf.commitedIndex {
+			rf.lastAppliedIndex++
+			msg := ApplyMsg{
+				CommandValid: true,
+				Command:      rf.logEntries[rf.lastAppliedIndex].Command,
+				CommandIndex: rf.logEntries[rf.lastAppliedIndex].Index,
+				CommandTerm:  rf.logEntries[rf.lastAppliedIndex].Term,
+			}
+			msgs = append(msgs, msg)
+		}
+		rf.mu.Unlock()
+		if len(msgs) > 0 {
+			for _, msg := range msgs {
+				rf.applyCh <- msg
+			}
+		}
+		time.Sleep(rf.hbTime * 2)
+	}
 }
 
 func (rf *Raft) handleTimeout() {
