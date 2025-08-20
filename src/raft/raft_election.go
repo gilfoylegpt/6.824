@@ -47,8 +47,7 @@ func (rf *Raft) runForElection() {
 			}
 
 			rf.mu.Lock()
-			quit := rf.checkQuitFollower(reply.Term)
-			if quit {
+			if rf.checkQuitFollower(reply.Term) {
 				rf.mu.Unlock()
 				rf.resetTimer()
 				return
