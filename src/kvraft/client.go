@@ -1,12 +1,17 @@
 package kvraft
 
-import "mitds/labrpc"
-import "crypto/rand"
-import "math/big"
+import (
+	"crypto/rand"
+	"math/big"
+	"mitds/labrpc"
+)
 
 type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
+	clientId   int64
+	commandNum int
+	knowLeader int
 }
 
 func nrand() int64 {
@@ -20,6 +25,9 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	// You'll have to add code here.
+	ck.clientId = nrand()
+	ck.commandNum = 1
+	ck.knowLeader = -1
 	return ck
 }
 
@@ -36,7 +44,41 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
-	return ""
+	args := GetArgs{
+		Key:        key,
+		ClientId:   ck.clientId,
+		CommandNum: ck.commandNum,
+	}
+
+	for i := 0; ; i = (i + 1) % len(ck.servers) {
+		if ck.knowLeader != -1 {
+			i = ck.knowLeader
+		}
+
+		reply := GetReply{}
+		ok := ck.servers[i].Call("KVServer.Get", &args, &reply)
+		if !ok {
+			ck.knowLeader = -1
+			continue
+		} else {
+			switch reply.Err {
+			case OK:
+				ck.commandNum++
+				ck.knowLeader = i
+				return reply.Value
+			case ErrNoKey:
+				ck.commandNum++
+				ck.knowLeader = i
+				return ""
+			case ErrTimeOut:
+				ck.knowLeader = -1
+				continue
+			case ErrWrongLeader:
+				ck.knowLeader = -1
+				continue
+			}
+		}
+	}
 }
 
 // shared by Put and Append.
@@ -49,6 +91,43 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	// You will have to modify this function.
+	args := PutAppendArgs{
+		Key:        key,
+		Value:      value,
+		Op:         op,
+		ClientId:   ck.clientId,
+		CommandNum: ck.commandNum,
+	}
+
+	for i := 0; ; i = (i + 1) % len(ck.servers) {
+		if ck.knowLeader != -1 {
+			i = ck.knowLeader
+		}
+
+		reply := PutAppendReply{}
+		ok := ck.servers[i].Call("KVServer.PutAppend", &args, &reply)
+		if !ok {
+			ck.knowLeader = -1
+			continue
+		} else {
+			switch reply.Err {
+			case OK:
+				ck.commandNum++
+				ck.knowLeader = i
+				return
+			case ErrNoKey:
+				ck.commandNum++
+				ck.knowLeader = i
+				return
+			case ErrTimeOut:
+				ck.knowLeader = -1
+				continue
+			case ErrWrongLeader:
+				ck.knowLeader = -1
+				continue
+			}
+		}
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {

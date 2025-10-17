@@ -1,12 +1,14 @@
 package kvraft
 
 import (
+	"bytes"
 	"log"
 	"mitds/labgob"
 	"mitds/labrpc"
 	"mitds/raft"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 const Debug = 0
@@ -18,10 +20,28 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 	return
 }
 
+const RespondTimeOut = 500
+
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	Key        string
+	Value      string
+	OpType     string
+	ClientId   int64
+	CommandNum int
+}
+
+type Session struct {
+	LastCommandNum int
+	OpType         string
+	Response       Reply
+}
+
+type Reply struct {
+	Value string
+	Err   Err
 }
 
 type KVServer struct {
@@ -34,14 +54,88 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	kvdb                  map[string]string
+	sessions              map[int64]Session
+	notifyChannel         map[int]chan Reply
+	lastAppliedOpIndex    int
+	passiveSnapshotBefore bool
+}
+
+func (kv *KVServer) createChannel(index int) chan Reply {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	kv.notifyChannel[index] = make(chan Reply, 1)
+	return kv.notifyChannel[index]
+}
+
+func (kv *KVServer) destroyChannel(index int) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if _, ok := kv.notifyChannel[index]; ok {
+		close(kv.notifyChannel[index])
+		delete(kv.notifyChannel, index)
+	}
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	op := Op{
+		Key:        args.Key,
+		OpType:     "Get",
+		ClientId:   args.ClientId,
+		CommandNum: args.CommandNum,
+	}
+
+	index, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	ch := kv.createChannel(index)
+	select {
+	case r := <-ch:
+		reply.Value = r.Value
+		reply.Err = r.Err
+	case <-time.After(RespondTimeOut * time.Millisecond):
+		reply.Err = ErrTimeOut
+	}
+
+	kv.destroyChannel(index)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	op := Op{
+		Key:        args.Key,
+		Value:      args.Value,
+		OpType:     args.Op,
+		ClientId:   args.ClientId,
+		CommandNum: args.CommandNum,
+	}
+
+	kv.mu.Lock()
+	if session, ok := kv.sessions[args.ClientId]; ok && args.CommandNum <= session.LastCommandNum {
+		reply.Err = session.Response.Err
+		kv.mu.Unlock()
+		return
+	} else {
+		kv.mu.Unlock()
+		index, _, isLeader := kv.rf.Start(op)
+		if !isLeader {
+			reply.Err = ErrWrongLeader
+			return
+		}
+
+		ch := kv.createChannel(index)
+		select {
+		case r := <-ch:
+			reply.Err = r.Err
+		case <-time.After(RespondTimeOut * time.Millisecond):
+			reply.Err = ErrTimeOut
+		}
+		kv.destroyChannel(index)
+	}
 }
 
 // the tester calls Kill() when a KVServer instance won't
@@ -61,6 +155,97 @@ func (kv *KVServer) Kill() {
 func (kv *KVServer) killed() bool {
 	z := atomic.LoadInt32(&kv.dead)
 	return z == 1
+}
+
+func (kv *KVServer) applyMessage() {
+	for !kv.killed() {
+		applyMsg := <-kv.applyCh
+		if applyMsg.CommandValid {
+			kv.mu.Lock()
+			if applyMsg.CommandIndex <= kv.lastAppliedOpIndex {
+				kv.mu.Unlock()
+				continue
+			}
+
+			if kv.passiveSnapshotBefore {
+				if applyMsg.CommandIndex != kv.lastAppliedOpIndex+1 {
+					kv.mu.Unlock()
+					continue
+				}
+				kv.passiveSnapshotBefore = false
+			}
+
+			kv.lastAppliedOpIndex = applyMsg.CommandIndex
+			op, ok := applyMsg.Command.(Op)
+			if ok {
+				var reply Reply
+				if session, ok := kv.sessions[op.ClientId]; ok && op.OpType != "Get" && op.CommandNum <= session.LastCommandNum {
+					reply = session.Response
+				} else {
+					switch op.OpType {
+					case "Get":
+						if v, ok := kv.kvdb[op.Key]; ok {
+							reply.Err = OK
+							reply.Value = v
+						} else {
+							reply.Err = ErrNoKey
+							reply.Value = ""
+						}
+					case "Put":
+						kv.kvdb[op.Key] = op.Value
+						reply.Err = OK
+					case "Append":
+						if v, ok := kv.kvdb[op.Key]; ok {
+							kv.kvdb[op.Key] = v + op.Value
+							reply.Err = OK
+						} else {
+							kv.kvdb[op.Key] = op.Value
+							reply.Err = ErrNoKey
+						}
+					}
+
+					if op.OpType != "Get" {
+						kv.sessions[op.ClientId] = Session{
+							LastCommandNum: op.CommandNum,
+							OpType:         op.OpType,
+							Response:       reply,
+						}
+					}
+				}
+
+				if ch, ok := kv.notifyChannel[applyMsg.CommandIndex]; ok {
+					if term, isLeader := kv.rf.GetState(); isLeader && term == applyMsg.CommandTerm {
+						ch <- reply
+					}
+				}
+			}
+			kv.mu.Unlock()
+		} else if applyMsg.SnapshotValid {
+			kv.mu.Lock()
+			kv.applySnapshotToSM(applyMsg.SnapShotData)
+			kv.lastAppliedOpIndex = applyMsg.SnapshotIndex 
+			kv.passiveSnapshotBefore = true 
+			kv.mu.Unlock() 
+			kv.rf.SetPassiveSnapshotFlag(false)
+		}
+	}
+}
+
+func (kv *KVServer) applySnapshotToSM(data []byte) {
+	if data == nil || len(data) == 0 {
+		return 
+	}
+
+	b := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(b)
+	var kvdb map[string]string 
+	var sessions map[int64]Session 
+	if d.Decode(&kvdb) != nil || d.Decode(&sessions) != nil {
+		DPrintf("applySnapshotToSM failed!")
+	} else {
+		kv.kvdb = kvdb 
+		kv.sessions = sessions
+	}
 }
 
 // servers[] contains the ports of the set of
@@ -83,13 +268,20 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv := new(KVServer)
 	kv.me = me
 	kv.maxraftstate = maxraftstate
+	kv.dead = 0
 
 	// You may need initialization code here.
-
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	kv.kvdb = make(map[string]string)
+	kv.sessions = make(map[int64]Session)
+	kv.notifyChannel = make(map[int]chan Reply)
+	kv.lastAppliedOpIndex = 0
+	kv.passiveSnapshotBefore = false
+
+	go kv.applyMessage()
 
 	return kv
 }

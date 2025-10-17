@@ -37,6 +37,10 @@ type ApplyMsg struct {
 	Command      interface{}
 	CommandIndex int
 	CommandTerm  int
+
+	SnapshotValid bool
+	SnapshotIndex int
+	SnapShotData  []byte
 }
 
 // A Go object implementing a single Raft peer.
@@ -66,6 +70,18 @@ type Raft struct {
 	ready  bool
 
 	applyCh chan ApplyMsg
+
+	lastIncludedTerm  int
+	lastIncludedIndex int
+
+	activeSnapshotFlag  bool
+	passiveSnapshotFlag bool
+}
+
+func (rf *Raft) SetPassiveSnapshotFlag (flag bool ) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.passiveSnapshotFlag = flag 
 }
 
 // return currentTerm and whether this server
