@@ -223,9 +223,9 @@ func (kv *KVServer) applyMessage() {
 		} else if applyMsg.SnapshotValid {
 			kv.mu.Lock()
 			kv.applySnapshotToSM(applyMsg.SnapShotData)
-			kv.lastAppliedOpIndex = applyMsg.SnapshotIndex 
-			kv.passiveSnapshotBefore = true 
-			kv.mu.Unlock() 
+			kv.lastAppliedOpIndex = applyMsg.SnapshotIndex
+			kv.passiveSnapshotBefore = true
+			kv.mu.Unlock()
 			kv.rf.SetPassiveSnapshotFlag(false)
 		}
 	}
@@ -233,18 +233,48 @@ func (kv *KVServer) applyMessage() {
 
 func (kv *KVServer) applySnapshotToSM(data []byte) {
 	if data == nil || len(data) == 0 {
-		return 
+		return
 	}
 
 	b := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(b)
-	var kvdb map[string]string 
-	var sessions map[int64]Session 
+	var kvdb map[string]string
+	var sessions map[int64]Session
 	if d.Decode(&kvdb) != nil || d.Decode(&sessions) != nil {
 		DPrintf("applySnapshotToSM failed!")
 	} else {
-		kv.kvdb = kvdb 
+		kv.kvdb = kvdb
 		kv.sessions = sessions
+	}
+}
+
+func (kv *KVServer) checkSnapshotNeed() {
+	for !kv.killed() {
+
+		if kv.rf.GetPassiveAndSetActiveFlag() {
+			time.Sleep(50 * time.Millisecond)
+			continue
+		}
+
+		var snapshotIndex int 
+		var snapshotData []byte 
+		if kv.maxraftstate != -1 && float64(kv.rf.GetRaftStateSize()) / float64(kv.maxraftstate) > 0.9 {
+			kv.mu.Lock()
+			snapshotIndex = kv.lastAppliedOpIndex 
+			b := new(bytes.Buffer)
+			e := labgob.NewEncoder(b)
+			e.Encode(kv.kvdb)
+			e.Encode(kv.sessions)
+			snapshotData = b.Bytes() 
+			kv.mu.Unlock()
+		}
+
+		if snapshotData != nil {
+			kv.rf.SnapShot(snapshotIndex, snapshotData)
+		}
+
+		kv.rf.SetActiveSnapshotFlag(false)
+		time.Sleep(50 * time.Microsecond)
 	}
 }
 
@@ -282,6 +312,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.passiveSnapshotBefore = false
 
 	go kv.applyMessage()
+	go kv.checkSnapshotNeed()
 
 	return kv
 }

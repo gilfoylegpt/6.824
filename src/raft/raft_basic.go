@@ -84,6 +84,27 @@ func (rf *Raft) SetPassiveSnapshotFlag (flag bool ) {
 	rf.passiveSnapshotFlag = flag 
 }
 
+func (rf *Raft) SetActiveSnapshotFlag (flag bool) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.activeSnapshotFlag = flag
+}
+
+func (rf *Raft) GetPassiveAndSetActiveFlag () bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	if !rf.passiveSnapshotFlag {
+		rf.activeSnapshotFlag = true 
+	}
+	return rf.passiveSnapshotFlag 
+}
+
+func (rf *Raft) GetRaftStateSize () int {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	return rf.persister.RaftStateSize()
+}
+
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
