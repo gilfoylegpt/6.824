@@ -136,6 +136,8 @@ func (rf *Raft) persist() {
 	e.Encode(rf.currentTerm)
 	e.Encode(rf.voteFor)
 	e.Encode(rf.logEntries)
+	e.Encode(rf.lastIncludedTerm)
+	e.Encode(rf.lastIncludedIndex)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 }
@@ -163,14 +165,20 @@ func (rf *Raft) readPersist(data []byte) {
 	var currentTerm int
 	var voteFor int
 	var logEntries []LogEntry
+	var lastIncludedTerm int 
+	var lastIncludedIndex int 
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&voteFor) != nil ||
-		d.Decode(&logEntries) != nil {
+		d.Decode(&logEntries) != nil ||
+		d.Decode(&lastIncludedTerm) != nil || 
+		d.Decode(&lastIncludedIndex) != nil {
 		DPrintf("[PERSIST ERROR]: raft server %d readPersist error\n", rf.me)
 	} else {
 		rf.currentTerm = currentTerm
 		rf.voteFor = voteFor
 		rf.logEntries = logEntries
+		rf.lastIncludedTerm = lastIncludedTerm
+		rf.lastIncludedIndex = lastIncludedIndex
 	}
 }
 

@@ -22,14 +22,19 @@ func (rf *Raft) leaderAppendEntries() {
 			continue
 		}
 
+		if rf.nextIndex[i] <= rf.lastIncludedIndex {
+			go rf.leaderSendSnapshot(i, rf.persister.ReadSnapshot())
+			return
+		}
+
 		go func(ii int) {
 			rf.mu.Lock()
 			entries := []LogEntry{}
 			if rf.nextIndex[ii] <= rf.logEntries[len(rf.logEntries)-1].Index {
-				entries = make([]LogEntry, len(rf.logEntries)-rf.nextIndex[ii])
-				copy(entries, rf.logEntries[rf.nextIndex[ii]:])
+				entries = make([]LogEntry, len(rf.logEntries)+rf.lastIncludedIndex-rf.nextIndex[ii])
+				copy(entries, rf.logEntries[rf.nextIndex[ii-rf.lastIncludedIndex]:])
 			}
-			prelog := rf.logEntries[rf.nextIndex[ii]-1]
+			prelog := rf.logEntries[rf.nextIndex[ii]-rf.lastIncludedIndex-1]
 			args := &AppendEntriesArgs{
 				Term:              term,
 				LeaderId:          rf.me,
@@ -95,7 +100,7 @@ func (rf *Raft) leaderAppendEntries() {
 				sort.Ints(sortMatchIndex)
 				j := sortMatchIndex[(len(sortMatchIndex)-1)/2]
 				for k := j; k > rf.commitedIndex; k-- {
-					if rf.logEntries[k].Term == rf.currentTerm {
+					if rf.logEntries[k-rf.lastIncludedIndex].Term == rf.currentTerm {
 						rf.commitedIndex = k
 						DPrintf("[APPEND INFO]: Leader %d committed to index %d\n", rf.me, rf.commitedIndex)
 						break
@@ -139,18 +144,30 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		go rf.handleTimeout()
 	}
 
+	if args.PreLogIndex < rf.lastIncludedIndex {
+		if len(args.LogEntries) == 0 || args.LogEntries[len(args.LogEntries)-1].Index <= rf.lastIncludedIndex {
+			reply.Term = rf.currentTerm
+			reply.Success = true
+			return
+		} else {
+			args.PreLogIndex = rf.lastIncludedIndex
+			args.PreLogTerm = rf.lastIncludedTerm
+			args.LogEntries = args.LogEntries[rf.lastIncludedIndex-args.PreLogIndex:]
+		}
+	}
+
 	DPrintf("[APPEND INFO]: raft server %d got append from leader %d (Term:%d EntriesLen:%d)\n", rf.me, args.LeaderId, args.Term, len(args.LogEntries))
-	if args.PreLogIndex > rf.logEntries[len(rf.logEntries)-1].Index || rf.logEntries[args.PreLogIndex].Term != args.PreLogTerm {
+	if args.PreLogIndex > rf.logEntries[len(rf.logEntries)-1].Index || rf.logEntries[args.PreLogIndex-rf.lastIncludedIndex].Term != args.PreLogTerm {
 		if args.PreLogIndex > rf.logEntries[len(rf.logEntries)-1].Index {
 			reply.ConflictTerm = -1
 			reply.ConflictIndex = rf.logEntries[len(rf.logEntries)-1].Index + 1
 		} else {
-			reply.ConflictTerm = rf.logEntries[args.PreLogIndex].Term
-			i := args.PreLogIndex - 1
+			reply.ConflictTerm = rf.logEntries[args.PreLogIndex-rf.lastIncludedIndex].Term
+			i := args.PreLogIndex - 1 - rf.lastIncludedIndex
 			for i >= 0 && rf.logEntries[i].Term == reply.ConflictTerm {
 				i--
 			}
-			reply.ConflictIndex = i + 1
+			reply.ConflictIndex = i + 1 + rf.lastIncludedIndex
 		}
 		reply.Success = false
 		reply.Term = rf.currentTerm
@@ -158,7 +175,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	} else {
 		misMatchIdx := -1
 		for i, entry := range args.LogEntries {
-			if args.PreLogIndex+1+i > rf.logEntries[len(rf.logEntries)-1].Index || rf.logEntries[args.PreLogIndex+1+i].Term != entry.Term {
+			if args.PreLogIndex+1+i > rf.logEntries[len(rf.logEntries)-1].Index || rf.logEntries[args.PreLogIndex+1+i-rf.lastIncludedIndex].Term != entry.Term {
 				misMatchIdx = args.PreLogIndex + 1 + i
 				break
 			}
@@ -166,7 +183,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 		if misMatchIdx != -1 {
 			args.LogEntries = args.LogEntries[misMatchIdx-args.PreLogIndex-1:]
-			rf.logEntries = rf.logEntries[:misMatchIdx]
+			rf.logEntries = rf.logEntries[:misMatchIdx-rf.lastIncludedIndex]
 			rf.logEntries = append(rf.logEntries, args.LogEntries...)
 			rf.persist()
 		}
