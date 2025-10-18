@@ -7,6 +7,7 @@ func (rf *Raft) SnapShot(snapshotIndex int, snapshotData []byte) {
 		return
 	}
 
+	DPrintf("[SNAPSHOT INFO]: raft server %d active snapshot with lastIncludedIndex %d snapshotIndex %d\n", rf.me, rf.lastIncludedIndex, snapshotIndex)
 	newlog := []LogEntry{{Term: rf.logEntries[snapshotIndex-rf.lastIncludedIndex].Term, Index: snapshotIndex}}
 	rf.logEntries = append(newlog, rf.logEntries[snapshotIndex-rf.lastIncludedIndex+1:]...)
 	rf.lastIncludedIndex = newlog[0].Index
@@ -53,7 +54,7 @@ func (rf *Raft) leaderSendSnapshot(idx int, snapshotData []byte) {
 	reply := InstallSnapShotReply{}
 	ok := rf.sendSnapshot(idx, &args, &reply)
 	if !ok {
-		DPrintf("[SNAPSHOT INFO]: sendsnapshot failed")
+		DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot failed\n", idx)
 	} else {
 		if rf.checkOutdated(Leader, term) {
 			return
@@ -74,7 +75,7 @@ func (rf *Raft) leaderSendSnapshot(idx int, snapshotData []byte) {
 	}
 }
 
-func (rf *Raft) condSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotReply) {
+func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if args.Term < rf.currentTerm || rf.activeSnapshotFlag {
@@ -98,6 +99,8 @@ func (rf *Raft) condSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 		reply.Accept = false
 		return
 	}
+
+	DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot with lastIncludedIndex %d snapshotIndex %d\n", rf.me, rf.lastIncludedIndex, snapshotIndex)
 
 	rf.lastAppliedIndex = snapshotIndex
 	if snapshotIndex >= rf.logEntries[len(rf.logEntries)-1].Index || rf.logEntries[snapshotIndex-rf.lastIncludedIndex].Term != snapshotTerm {
@@ -141,6 +144,6 @@ type InstallSnapShotReply struct {
 }
 
 func (rf *Raft) sendSnapshot(idx int, args *InstallSnapShotArgs, reply *InstallSnapShotReply) bool {
-	ok := rf.peers[idx].Call("Raft.condSnapshot", args, reply)
+	ok := rf.peers[idx].Call("Raft.CondSnapshot", args, reply)
 	return ok
 }

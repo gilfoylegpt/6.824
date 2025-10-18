@@ -22,17 +22,17 @@ func (rf *Raft) leaderAppendEntries() {
 			continue
 		}
 
-		if rf.nextIndex[i] <= rf.lastIncludedIndex {
-			go rf.leaderSendSnapshot(i, rf.persister.ReadSnapshot())
-			return
-		}
-
 		go func(ii int) {
 			rf.mu.Lock()
 			entries := []LogEntry{}
+			if rf.nextIndex[ii] <= rf.lastIncludedIndex {
+				go rf.leaderSendSnapshot(i, rf.persister.ReadRaftState())
+				rf.mu.Unlock()
+				return
+			}
 			if rf.nextIndex[ii] <= rf.logEntries[len(rf.logEntries)-1].Index {
 				entries = make([]LogEntry, len(rf.logEntries)+rf.lastIncludedIndex-rf.nextIndex[ii])
-				copy(entries, rf.logEntries[rf.nextIndex[ii-rf.lastIncludedIndex]:])
+				copy(entries, rf.logEntries[rf.nextIndex[ii]-rf.lastIncludedIndex:])
 			}
 			prelog := rf.logEntries[rf.nextIndex[ii]-rf.lastIncludedIndex-1]
 			args := &AppendEntriesArgs{

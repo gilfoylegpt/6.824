@@ -95,6 +95,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.recoverFromSnapShot(rf.persister.ReadSnapshot())
 	rf.persist()
 	DPrintf("[BOOT INFO]: raft server %d start\n", rf.me)
 
@@ -102,6 +103,25 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go rf.applier()
 
 	return rf
+}
+
+func (rf *Raft) recoverFromSnapShot(data []byte) {
+	if data == nil || len(data) == 0 {
+		return 
+	}
+
+	DPrintf("[SNAPSHOT INFO]: raft server %d load snapshot from index %d\n", rf.me, rf.lastIncludedIndex)
+	rf.lastAppliedIndex = rf.lastIncludedIndex
+	rf.commitedIndex = rf.lastIncludedIndex 
+	applyMsg := ApplyMsg{
+		SnapshotValid: true,
+		CommandValid: false,
+		SnapshotIndex: rf.lastIncludedIndex,
+		SnapShotData:  data,
+	}
+	go func(msg ApplyMsg) {
+		rf.applyCh <- msg
+	}(applyMsg)
 }
 
 func (rf *Raft) applier() {
@@ -112,9 +132,9 @@ func (rf *Raft) applier() {
 			rf.lastAppliedIndex++
 			msg := ApplyMsg{
 				CommandValid: true,
-				Command:      rf.logEntries[rf.lastAppliedIndex].Command,
-				CommandIndex: rf.logEntries[rf.lastAppliedIndex].Index,
-				CommandTerm:  rf.logEntries[rf.lastAppliedIndex].Term,
+				Command:      rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Command,
+				CommandIndex: rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Index,
+				CommandTerm:  rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Term,
 			}
 			msgs = append(msgs, msg)
 		}
