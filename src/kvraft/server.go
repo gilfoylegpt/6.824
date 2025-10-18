@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const Debug = 0
+const Debug = 1
 
 func DPrintf(format string, a ...interface{}) (n int, err error) {
 	if Debug > 0 {
@@ -101,7 +101,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Err = ErrTimeOut
 	}
 
-	kv.destroyChannel(index)
+	go kv.destroyChannel(index)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
@@ -134,7 +134,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		case <-time.After(RespondTimeOut * time.Millisecond):
 			reply.Err = ErrTimeOut
 		}
-		kv.destroyChannel(index)
+		go kv.destroyChannel(index)
 	}
 }
 
@@ -169,9 +169,15 @@ func (kv *KVServer) applyMessage() {
 
 			if kv.passiveSnapshotBefore {
 				if applyMsg.CommandIndex != kv.lastAppliedOpIndex+1 {
+					if applyMsg.CommandIndex > kv.lastAppliedOpIndex+1 {
+						raft.DPrintf("[SNAPSHOT WARNING]: kv server %d apply message index %d > lastAppliedIndex %d + 1 which might skip logs so cancel it.\n",
+							kv.me, applyMsg.CommandIndex, kv.lastAppliedOpIndex)
+					}
 					kv.mu.Unlock()
 					continue
 				}
+				DPrintf("[SNAPSHOT WARNING]: kv server %d apply message index %d after lastappliedindex %d which ensure passive snapshot won't miss logs.\n",
+					kv.me, applyMsg.CommandIndex, kv.lastAppliedOpIndex)
 				kv.passiveSnapshotBefore = false
 			}
 
@@ -191,16 +197,24 @@ func (kv *KVServer) applyMessage() {
 							reply.Err = ErrNoKey
 							reply.Value = ""
 						}
+						DPrintf("[KVSERVER INFO]: kvserver %d apply get key %s value %s index %d\n",
+							kv.me, op.Key, reply.Value, applyMsg.CommandIndex)
 					case "Put":
 						kv.kvdb[op.Key] = op.Value
 						reply.Err = OK
+						DPrintf("[KVSERVER INFO]: kvserver %d apply put key %s value %s index %d\n",
+							kv.me, op.Key, op.Value, applyMsg.CommandIndex)
 					case "Append":
 						if v, ok := kv.kvdb[op.Key]; ok {
 							kv.kvdb[op.Key] = v + op.Value
 							reply.Err = OK
+							DPrintf("[KVSERVER INFO]: kvserver %d apply append key %s value %s oldvalue %s newvalue %s index %d\n",
+								kv.me, op.Key, op.Value, v, kv.kvdb[op.Key], applyMsg.CommandIndex)
 						} else {
 							kv.kvdb[op.Key] = op.Value
 							reply.Err = ErrNoKey
+							DPrintf("[KVSERVER INFO]: kvserver %d apply append key %s value %s just like put index %d\n",
+								kv.me, op.Key, op.Value, applyMsg.CommandIndex)
 						}
 					}
 
@@ -222,8 +236,8 @@ func (kv *KVServer) applyMessage() {
 			kv.mu.Unlock()
 		} else if applyMsg.SnapshotValid {
 			kv.mu.Lock()
-			kv.applySnapshotToSM(applyMsg.SnapShotData)
 			kv.lastAppliedOpIndex = applyMsg.SnapshotIndex
+			kv.applySnapshotToSM(applyMsg.SnapShotData)
 			kv.passiveSnapshotBefore = true
 			kv.mu.Unlock()
 			kv.rf.SetPassiveSnapshotFlag(false)
@@ -241,8 +255,9 @@ func (kv *KVServer) applySnapshotToSM(data []byte) {
 	var kvdb map[string]string
 	var sessions map[int64]Session
 	if d.Decode(&kvdb) != nil || d.Decode(&sessions) != nil {
-		DPrintf("applySnapshotToSM failed!")
+		DPrintf("[SNAPSHOT ERROR]: kvserver %d applySnapshotToSM failed\n", kv.me)
 	} else {
+		DPrintf("[SNAPSHOT WARNING]: kvserver %d install snapshot index %d kvdb %v\n", kv.me, kv.lastAppliedOpIndex, kvdb)
 		kv.kvdb = kvdb
 		kv.sessions = sessions
 	}
@@ -252,20 +267,22 @@ func (kv *KVServer) checkSnapshotNeed() {
 	for !kv.killed() {
 
 		if kv.rf.GetPassiveAndSetActiveFlag() {
+			DPrintf("[SNATSHOT WARNING]: kv server %d is going on passive snapshot so not gonnna do active snapshot\n", kv.me)
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
 
-		var snapshotIndex int 
-		var snapshotData []byte 
-		if kv.maxraftstate != -1 && float64(kv.rf.GetRaftStateSize()) / float64(kv.maxraftstate) > 0.9 {
+		var snapshotIndex int
+		var snapshotData []byte
+		if kv.maxraftstate != -1 && float32(kv.rf.GetRaftStateSize())/float32(kv.maxraftstate) > 0.9 {
 			kv.mu.Lock()
-			snapshotIndex = kv.lastAppliedOpIndex 
+			snapshotIndex = kv.lastAppliedOpIndex
 			b := new(bytes.Buffer)
 			e := labgob.NewEncoder(b)
 			e.Encode(kv.kvdb)
 			e.Encode(kv.sessions)
-			snapshotData = b.Bytes() 
+			DPrintf("[SNAPSHOT WARNING]: kvserver %d generate snapshot index %d kvdb %v\n", kv.me, snapshotIndex, kv.kvdb)
+			snapshotData = b.Bytes()
 			kv.mu.Unlock()
 		}
 
@@ -301,6 +318,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.dead = 0
 
 	// You may need initialization code here.
+	var mutex sync.Mutex
+	kv.mu = mutex
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 

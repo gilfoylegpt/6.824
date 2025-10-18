@@ -100,8 +100,6 @@ func (rf *Raft) GetPassiveAndSetActiveFlag () bool {
 }
 
 func (rf *Raft) GetRaftStateSize () int {
-	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	return rf.persister.RaftStateSize()
 }
 

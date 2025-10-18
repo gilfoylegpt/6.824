@@ -26,7 +26,7 @@ func (rf *Raft) leaderAppendEntries() {
 			rf.mu.Lock()
 			entries := []LogEntry{}
 			if rf.nextIndex[ii] <= rf.lastIncludedIndex {
-				go rf.leaderSendSnapshot(i, rf.persister.ReadRaftState())
+				go rf.leaderSendSnapshot(ii, rf.persister.ReadSnapshot())
 				rf.mu.Unlock()
 				return
 			}
@@ -156,7 +156,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 	}
 
-	DPrintf("[APPEND INFO]: raft server %d got append from leader %d (Term:%d EntriesLen:%d)\n", rf.me, args.LeaderId, args.Term, len(args.LogEntries))
+	// DPrintf("[APPEND INFO]: raft server %d got append from leader %d (Term:%d EntriesLen:%d)\n", rf.me, args.LeaderId, args.Term, len(args.LogEntries))
 	if args.PreLogIndex > rf.logEntries[len(rf.logEntries)-1].Index || rf.logEntries[args.PreLogIndex-rf.lastIncludedIndex].Term != args.PreLogTerm {
 		if args.PreLogIndex > rf.logEntries[len(rf.logEntries)-1].Index {
 			reply.ConflictTerm = -1

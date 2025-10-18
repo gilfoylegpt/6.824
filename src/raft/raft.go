@@ -93,6 +93,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.ready = false
 	rf.applyCh = applyCh
 
+	rf.lastIncludedIndex = 0
+	rf.lastIncludedTerm = 0
+	rf.passiveSnapshotFlag = false
+	rf.activeSnapshotFlag = false
+
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 	rf.recoverFromSnapShot(rf.persister.ReadSnapshot())
@@ -107,15 +112,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 func (rf *Raft) recoverFromSnapShot(data []byte) {
 	if data == nil || len(data) == 0 {
-		return 
+		return
 	}
 
 	DPrintf("[SNAPSHOT INFO]: raft server %d load snapshot from index %d\n", rf.me, rf.lastIncludedIndex)
 	rf.lastAppliedIndex = rf.lastIncludedIndex
-	rf.commitedIndex = rf.lastIncludedIndex 
+	rf.commitedIndex = rf.lastIncludedIndex
 	applyMsg := ApplyMsg{
 		SnapshotValid: true,
-		CommandValid: false,
+		CommandValid:  false,
 		SnapshotIndex: rf.lastIncludedIndex,
 		SnapShotData:  data,
 	}
@@ -124,27 +129,61 @@ func (rf *Raft) recoverFromSnapShot(data []byte) {
 	}(applyMsg)
 }
 
+// func (rf *Raft) applier() {
+// 	for !rf.killed() {
+// 		rf.mu.Lock()
+// 		msgs := []ApplyMsg{}
+// 		for rf.lastAppliedIndex < rf.commitedIndex {
+// 			rf.lastAppliedIndex++
+// 			msg := ApplyMsg{
+// 				CommandValid: true,
+// 				Command:      rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Command,
+// 				CommandIndex: rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Index,
+// 				CommandTerm:  rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Term,
+// 			}
+// 			msgs = append(msgs, msg)
+// 		}
+// 		rf.mu.Unlock()
+// 		if len(msgs) > 0 {
+// 			for _, msg := range msgs {
+// 				rf.applyCh <- msg
+// 			}
+// 		}
+// 		time.Sleep(rf.hbTime * 2)
+// 	}
+// }
+
 func (rf *Raft) applier() {
 	for !rf.killed() {
 		rf.mu.Lock()
-		msgs := []ApplyMsg{}
-		for rf.lastAppliedIndex < rf.commitedIndex {
+
+		var applyMsg ApplyMsg
+		needApply := false
+
+		if rf.lastAppliedIndex < rf.commitedIndex {
 			rf.lastAppliedIndex++
-			msg := ApplyMsg{
-				CommandValid: true,
-				Command:      rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Command,
-				CommandIndex: rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Index,
-				CommandTerm:  rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Term,
+			if rf.lastAppliedIndex <= rf.lastIncludedIndex {
+				rf.lastAppliedIndex = rf.lastIncludedIndex
+				rf.mu.Unlock()
+				continue
 			}
-			msgs = append(msgs, msg)
+
+			applyMsg = ApplyMsg{
+				CommandValid:  true,
+				SnapshotValid: false,
+				Command:       rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Command,
+				CommandIndex:  rf.lastAppliedIndex,
+				CommandTerm:   rf.logEntries[rf.lastAppliedIndex-rf.lastIncludedIndex].Term,
+			}
+			needApply = true
 		}
 		rf.mu.Unlock()
-		if len(msgs) > 0 {
-			for _, msg := range msgs {
-				rf.applyCh <- msg
-			}
+
+		if needApply {
+			rf.applyCh <- applyMsg
+		} else {
+			time.Sleep(10 * time.Millisecond)
 		}
-		time.Sleep(rf.hbTime * 2)
 	}
 }
 

@@ -10,8 +10,8 @@ func (rf *Raft) SnapShot(snapshotIndex int, snapshotData []byte) {
 	DPrintf("[SNAPSHOT INFO]: raft server %d active snapshot with lastIncludedIndex %d snapshotIndex %d\n", rf.me, rf.lastIncludedIndex, snapshotIndex)
 	newlog := []LogEntry{{Term: rf.logEntries[snapshotIndex-rf.lastIncludedIndex].Term, Index: snapshotIndex}}
 	rf.logEntries = append(newlog, rf.logEntries[snapshotIndex-rf.lastIncludedIndex+1:]...)
-	rf.lastIncludedIndex = newlog[0].Index
-	rf.lastIncludedTerm = newlog[0].Term
+	rf.lastIncludedIndex = rf.logEntries[0].Index
+	rf.lastIncludedTerm = rf.logEntries[0].Term
 	rf.persist()
 	state := rf.persister.ReadRaftState()
 	rf.persister.SaveStateAndSnapshot(state, snapshotData)
@@ -19,7 +19,7 @@ func (rf *Raft) SnapShot(snapshotIndex int, snapshotData []byte) {
 	rf.mu.Unlock()
 
 	if isLeader {
-		for i := range rf.peers {
+		for i, _ := range rf.peers {
 			if i == rf.me {
 				continue
 			}
@@ -46,7 +46,7 @@ func (rf *Raft) leaderSendSnapshot(idx int, snapshotData []byte) {
 		Term:              term,
 		LeaderId:          rf.me,
 		LastIncludedTerm:  rf.lastIncludedTerm,
-		LastIncludedIndex: rf.lastAppliedIndex,
+		LastIncludedIndex: rf.lastIncludedIndex,
 		SnapshotData:      snapshotData,
 	}
 	rf.mu.Unlock()
@@ -54,7 +54,8 @@ func (rf *Raft) leaderSendSnapshot(idx int, snapshotData []byte) {
 	reply := InstallSnapShotReply{}
 	ok := rf.sendSnapshot(idx, &args, &reply)
 	if !ok {
-		DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot failed\n", idx)
+		// DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot failed\n", idx)
+		return
 	} else {
 		if rf.checkOutdated(Leader, term) {
 			return
@@ -62,13 +63,14 @@ func (rf *Raft) leaderSendSnapshot(idx int, snapshotData []byte) {
 
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
-		if rf.checkQuitFollower(term) {
+		if rf.checkQuitFollower(reply.Term) {
 			rf.resetTimer()
 			go rf.handleTimeout()
 			return
 		}
 
 		if reply.Accept {
+			// DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot succcess lastIncludedIndex %d\n", idx, args.LastIncludedIndex)
 			rf.matchIndex[idx] = max(rf.matchIndex[idx], args.LastIncludedIndex)
 			rf.nextIndex[idx] = rf.matchIndex[idx] + 1
 		}
@@ -81,6 +83,9 @@ func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 	if args.Term < rf.currentTerm || rf.activeSnapshotFlag {
 		reply.Term = rf.currentTerm
 		reply.Accept = false
+		if rf.activeSnapshotFlag {
+			DPrintf("[SNAPSHOT WARNING]: raft server %d is going on active snapshot so won't do passive snapshot\n", rf.me)
+		}
 		return
 	}
 
@@ -100,34 +105,38 @@ func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 		return
 	}
 
-	DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot with lastIncludedIndex %d snapshotIndex %d\n", rf.me, rf.lastIncludedIndex, snapshotIndex)
+	DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot with lastAppliedIndex %d snapshotIndex %d\n", rf.me, rf.lastAppliedIndex, snapshotIndex)
+	if rf.lastAppliedIndex > snapshotIndex {
+		DPrintf("[SNAPSHOT WARNING]: raft server %d passive snapshot lastAppliedIndex %d > snapshotIndex %d and need to revert lastappliedindex to snapshotIndex\n",
+			rf.me, rf.lastAppliedIndex, snapshotIndex)
+	}
 
 	rf.lastAppliedIndex = snapshotIndex
 	if snapshotIndex >= rf.logEntries[len(rf.logEntries)-1].Index || rf.logEntries[snapshotIndex-rf.lastIncludedIndex].Term != snapshotTerm {
 		rf.logEntries = []LogEntry{{Term: snapshotTerm, Index: snapshotIndex}}
 		rf.commitedIndex = snapshotIndex
 	} else {
-		newlog := []LogEntry{{Term: snapshotTerm, Index: snapshotIndex}} 
+		newlog := []LogEntry{{Term: snapshotTerm, Index: snapshotIndex}}
 		rf.logEntries = append(newlog, rf.logEntries[snapshotIndex-rf.lastIncludedIndex+1:]...)
 		rf.commitedIndex = max(rf.commitedIndex, snapshotIndex)
 	}
 
 	rf.lastIncludedIndex = snapshotIndex
 	rf.lastIncludedTerm = snapshotTerm
-	rf.persist() 
+	rf.persist()
 	state := rf.persister.ReadRaftState()
 	rf.passiveSnapshotFlag = true
 	rf.persister.SaveStateAndSnapshot(state, args.SnapshotData)
 
-	applyMsg := ApplyMsg {
+	applyMsg := ApplyMsg{
 		SnapshotValid: true,
-		CommandValid: false,
+		CommandValid:  false,
 		SnapshotIndex: snapshotIndex,
-		SnapShotData: args.SnapshotData,
+		SnapShotData:  args.SnapshotData,
 	}
 	rf.applyCh <- applyMsg
 	reply.Accept = true
-	return 
+	return
 }
 
 type InstallSnapShotArgs struct {

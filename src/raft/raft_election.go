@@ -56,7 +56,7 @@ func (rf *Raft) runForElection() {
 
 			voteMutex.Lock()
 			if reply.VoteGranted {
-				DPrintf("[ELECTION INFO]: candidate %d got vote from %d\n", rf.me, ii)
+				// DPrintf("[ELECTION INFO]: candidate %d got vote from %d\n", rf.me, ii)
 				votes++
 			}
 			finished++
