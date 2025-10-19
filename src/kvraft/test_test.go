@@ -1,17 +1,20 @@
 package kvraft
 
-import "mitds/porcupine"
-import "mitds/models"
-import "testing"
-import "strconv"
-import "time"
-import "math/rand"
-import "log"
-import "strings"
-import "sync"
-import "sync/atomic"
-import "fmt"
-import "io/ioutil"
+import (
+	"fmt"
+	"io/ioutil"
+	"log"
+	"math/rand"
+	"mitds/models"
+	"mitds/porcupine"
+	"mitds/pprof"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+)
 
 // The tester generously allows solutions to complete elections in one second
 // (much more than the paper's range of timeouts).
@@ -711,6 +714,7 @@ func TestSnapshotRecover3B(t *testing.T) {
 
 func TestSnapshotRecoverManyClients3B(t *testing.T) {
 	// Test: restarts, snapshots, many clients (3B) ...
+	go pprof.StartHTTPDebuger()
 	GenericTest(t, "3B", 20, false, true, false, 1000)
 }
 

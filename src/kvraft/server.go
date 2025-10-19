@@ -257,7 +257,7 @@ func (kv *KVServer) applySnapshotToSM(data []byte) {
 	if d.Decode(&kvdb) != nil || d.Decode(&sessions) != nil {
 		DPrintf("[SNAPSHOT ERROR]: kvserver %d applySnapshotToSM failed\n", kv.me)
 	} else {
-		DPrintf("[SNAPSHOT WARNING]: kvserver %d install snapshot index %d kvdb %v\n", kv.me, kv.lastAppliedOpIndex, kvdb)
+		// DPrintf("[SNAPSHOT WARNING]: kvserver %d install snapshot index %d kvdb %v\n", kv.me, kv.lastAppliedOpIndex, kvdb)
 		kv.kvdb = kvdb
 		kv.sessions = sessions
 	}
@@ -281,7 +281,7 @@ func (kv *KVServer) checkSnapshotNeed() {
 			e := labgob.NewEncoder(b)
 			e.Encode(kv.kvdb)
 			e.Encode(kv.sessions)
-			DPrintf("[SNAPSHOT WARNING]: kvserver %d generate snapshot index %d kvdb %v\n", kv.me, snapshotIndex, kv.kvdb)
+			// DPrintf("[SNAPSHOT WARNING]: kvserver %d generate snapshot index %d kvdb %v\n", kv.me, snapshotIndex, kv.kvdb)
 			snapshotData = b.Bytes()
 			kv.mu.Unlock()
 		}
