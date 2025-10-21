@@ -291,7 +291,7 @@ func (kv *KVServer) checkSnapshotNeed() {
 		}
 
 		kv.rf.SetActiveSnapshotFlag(false)
-		time.Sleep(50 * time.Microsecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 }
 
