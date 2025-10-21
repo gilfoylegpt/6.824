@@ -9,9 +9,10 @@ func (rf *Raft) SnapShot(snapshotIndex int, snapshotData []byte) {
 
 	DPrintf("[SNAPSHOT INFO]: raft server %d active snapshot with lastIncludedIndex %d snapshotIndex %d\n", rf.me, rf.lastIncludedIndex, snapshotIndex)
 	newlog := []LogEntry{{Term: rf.logEntries[snapshotIndex-rf.lastIncludedIndex].Term, Index: snapshotIndex}}
-	rf.logEntries = append(newlog, rf.logEntries[snapshotIndex-rf.lastIncludedIndex+1:]...)
-	rf.lastIncludedIndex = rf.logEntries[0].Index
-	rf.lastIncludedTerm = rf.logEntries[0].Term
+	newlog = append(newlog, rf.logEntries[snapshotIndex-rf.lastIncludedIndex+1:]...)
+	rf.logEntries = newlog
+	rf.lastIncludedIndex = newlog[0].Index
+	rf.lastIncludedTerm = newlog[0].Term
 	rf.persist()
 	state := rf.persister.ReadRaftState()
 	rf.persister.SaveStateAndSnapshot(state, snapshotData)
@@ -115,15 +116,17 @@ func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 	}
 
 	rf.lastAppliedIndex = snapshotIndex
+	var newlog []LogEntry
 	if snapshotIndex >= rf.logEntries[len(rf.logEntries)-1].Index || rf.logEntries[snapshotIndex-rf.lastIncludedIndex].Term != snapshotTerm {
-		rf.logEntries = []LogEntry{{Term: snapshotTerm, Index: snapshotIndex}}
+		newlog = []LogEntry{{Term: snapshotTerm, Index: snapshotIndex}}
 		rf.commitedIndex = snapshotIndex
 	} else {
-		newlog := []LogEntry{{Term: snapshotTerm, Index: snapshotIndex}}
-		rf.logEntries = append(newlog, rf.logEntries[snapshotIndex-rf.lastIncludedIndex+1:]...)
+		newlog = []LogEntry{{Term: snapshotTerm, Index: snapshotIndex}}
+		newlog = append(newlog, rf.logEntries[snapshotIndex-rf.lastIncludedIndex+1:]...)
 		rf.commitedIndex = max(rf.commitedIndex, snapshotIndex)
 	}
 
+	rf.logEntries = newlog
 	rf.lastIncludedIndex = snapshotIndex
 	rf.lastIncludedTerm = snapshotTerm
 	rf.persist()
