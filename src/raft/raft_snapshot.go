@@ -80,11 +80,14 @@ func (rf *Raft) leaderSendSnapshot(idx int, snapshotData []byte) {
 func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if args.Term < rf.currentTerm || rf.activeSnapshotFlag {
+	if args.Term < rf.currentTerm || rf.activeSnapshotFlag || rf.passiveSnapshotFlag {
 		reply.Term = rf.currentTerm
 		reply.Accept = false
 		if rf.activeSnapshotFlag {
 			DPrintf("[SNAPSHOT WARNING]: raft server %d is going on active snapshot so won't do passive snapshot\n", rf.me)
+		}
+		if rf.passiveSnapshotFlag {
+			DPrintf("[SNAPSHOT WARNING]: raft server %d is going on passive snapshot so won't do another passive snapshot before previous is done\n", rf.me)
 		}
 		return
 	}

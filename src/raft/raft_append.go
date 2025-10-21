@@ -150,9 +150,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 			reply.Success = true
 			return
 		} else {
+			args.LogEntries = args.LogEntries[rf.lastIncludedIndex-args.PreLogIndex:]
 			args.PreLogIndex = rf.lastIncludedIndex
 			args.PreLogTerm = rf.lastIncludedTerm
-			args.LogEntries = args.LogEntries[rf.lastIncludedIndex-args.PreLogIndex:]
 		}
 	}
 
