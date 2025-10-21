@@ -14,6 +14,8 @@ func (rf *Raft) SnapShot(snapshotIndex int, snapshotData []byte) {
 	rf.lastIncludedIndex = newlog[0].Index
 	rf.lastIncludedTerm = newlog[0].Term
 	rf.persist()
+	DPrintf("[SNAPSHOT INFO]: raft server %d active snapshot current term %d lastIncludedIndex %d, len(logs) %d\n",
+		rf.me, rf.currentTerm, rf.lastIncludedIndex, len(rf.logEntries))
 	state := rf.persister.ReadRaftState()
 	rf.persister.SaveStateAndSnapshot(state, snapshotData)
 	isLeader := rf.state == Leader
@@ -30,19 +32,16 @@ func (rf *Raft) SnapShot(snapshotIndex int, snapshotData []byte) {
 }
 
 func (rf *Raft) leaderSendSnapshot(idx int, snapshotData []byte) {
-	rf.mu.Lock()
-	term := rf.currentTerm
-	rf.mu.Unlock()
-
 	if rf.killed() {
 		return
 	}
 
-	if rf.checkOutdated(Leader, term) {
+	if rf.checkOutdated(Leader, -1) {
 		return
 	}
 
 	rf.mu.Lock()
+	term := rf.currentTerm
 	args := InstallSnapShotArgs{
 		Term:              term,
 		LeaderId:          rf.me,
@@ -74,6 +73,7 @@ func (rf *Raft) leaderSendSnapshot(idx int, snapshotData []byte) {
 			// DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot succcess lastIncludedIndex %d\n", idx, args.LastIncludedIndex)
 			rf.matchIndex[idx] = max(rf.matchIndex[idx], args.LastIncludedIndex)
 			rf.nextIndex[idx] = rf.matchIndex[idx] + 1
+			DPrintf("[NEXT INDEX]: term %d nextIndex[server %d] = %d\n", rf.currentTerm, idx, rf.nextIndex[idx])
 		}
 	}
 }
@@ -130,6 +130,8 @@ func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 	rf.lastIncludedIndex = snapshotIndex
 	rf.lastIncludedTerm = snapshotTerm
 	rf.persist()
+	DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot current term %d lastIncludedIndex %d, len(logs) %d\n",
+		rf.me, rf.currentTerm, rf.lastIncludedIndex, len(rf.logEntries))
 	state := rf.persister.ReadRaftState()
 	rf.passiveSnapshotFlag = true
 	rf.persister.SaveStateAndSnapshot(state, args.SnapshotData)

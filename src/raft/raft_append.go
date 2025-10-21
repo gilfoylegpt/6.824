@@ -1,6 +1,8 @@
 package raft
 
-import "sort"
+import (
+	"sort"
+)
 
 func (rf *Raft) leaderAppendEntries() {
 	rf.mu.Lock()
@@ -10,31 +12,39 @@ func (rf *Raft) leaderAppendEntries() {
 	rf.mu.Unlock()
 
 	for i, _ := range rf.peers {
-		if rf.killed() {
-			return
-		}
-
-		if rf.checkOutdated(Leader, term) {
-			return
-		}
-
 		if i == rf.me {
 			continue
 		}
 
 		go func(ii int) {
+			if rf.killed() {
+				return
+			}
+
+			if rf.checkOutdated(Leader, term) {
+				return
+			}
+
 			rf.mu.Lock()
 			entries := []LogEntry{}
-			if rf.nextIndex[ii] <= rf.lastIncludedIndex {
+			nextIdx := rf.nextIndex[ii]
+			if nextIdx <= rf.lastIncludedIndex {
 				go rf.leaderSendSnapshot(ii, rf.persister.ReadSnapshot())
 				rf.mu.Unlock()
 				return
 			}
-			if rf.nextIndex[ii] <= rf.logEntries[len(rf.logEntries)-1].Index {
-				entries = make([]LogEntry, len(rf.logEntries)+rf.lastIncludedIndex-rf.nextIndex[ii])
-				copy(entries, rf.logEntries[rf.nextIndex[ii]-rf.lastIncludedIndex:])
+			if nextIdx <= rf.logEntries[len(rf.logEntries)-1].Index {
+				entries = make([]LogEntry, len(rf.logEntries)+rf.lastIncludedIndex-nextIdx)
+				copy(entries, rf.logEntries[nextIdx-rf.lastIncludedIndex:])
 			}
-			prelog := rf.logEntries[rf.nextIndex[ii]-rf.lastIncludedIndex-1]
+			defer func() {
+				if r := recover(); r != nil {
+					DPrintf("[PANIC !!!]: Leader %d append server %d (Term:%d, nextIdx %d, lastIncludedIndex %d, len(logs) %d, entries %v\n",
+						rf.me, ii, term, nextIdx, rf.lastIncludedIndex, len(rf.logEntries), rf.logEntries)
+					panic(r)
+				}
+			}()
+			prelog := rf.logEntries[nextIdx-rf.lastIncludedIndex-1]
 			args := &AppendEntriesArgs{
 				Term:              term,
 				LeaderId:          rf.me,
@@ -95,6 +105,7 @@ func (rf *Raft) leaderAppendEntries() {
 				possibleMatchIdx := args.PreLogIndex + len(args.LogEntries)
 				rf.matchIndex[ii] = max(possibleMatchIdx, rf.matchIndex[ii])
 				rf.nextIndex[ii] = rf.matchIndex[ii] + 1
+				DPrintf("[NEXT INDEX]: term %d nextIndex[server %d] = %d\n", rf.currentTerm, ii, rf.nextIndex[ii])
 				sortMatchIndex := make([]int, len(rf.matchIndex))
 				copy(sortMatchIndex, rf.matchIndex)
 				sort.Ints(sortMatchIndex)
@@ -182,11 +193,12 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		}
 
 		if misMatchIdx != -1 {
-			args.LogEntries = args.LogEntries[misMatchIdx-args.PreLogIndex-1:]
-			rf.logEntries = rf.logEntries[:misMatchIdx-rf.lastIncludedIndex]
-			rf.logEntries = append(rf.logEntries, args.LogEntries...)
-			rf.persist()
+			newlog := rf.logEntries[:misMatchIdx-rf.lastIncludedIndex]
+			newlog = append(newlog, args.LogEntries[misMatchIdx-args.PreLogIndex-1:]...)
+			rf.logEntries = newlog
 		}
+
+		rf.persist()
 
 		if args.LeaderCommitIndex > rf.commitedIndex {
 			rf.commitedIndex = min(args.LeaderCommitIndex, rf.logEntries[len(rf.logEntries)-1].Index)

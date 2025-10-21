@@ -14,19 +14,19 @@ func (rf *Raft) runForElection() {
 	cond := sync.NewCond(&voteMutex)
 
 	for i, _ := range rf.peers {
-		if rf.killed() {
-			return
-		}
-
-		if rf.checkOutdated(Candidate, term) {
-			return
-		}
-
 		if i == rf.me {
 			continue
 		}
 
 		go func(ii int) {
+			if rf.killed() {
+				return
+			}
+
+			if rf.checkOutdated(Candidate, term) {
+				return
+			}
+
 			rf.mu.Lock()
 			args := &RequestVoteArgs{
 				Term:              term,
