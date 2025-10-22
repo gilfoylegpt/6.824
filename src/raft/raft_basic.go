@@ -129,6 +129,18 @@ func (rf *Raft) persist() {
 	// e.Encode(rf.yyy)
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
+	rf.persister.SaveRaftState(rf.prePersist())
+}
+
+func (rf *Raft) prePersist() []byte{
+	// Your code here (2C).
+	// Example:
+	// w := new(bytes.Buffer)
+	// e := labgob.NewEncoder(w)
+	// e.Encode(rf.xxx)
+	// e.Encode(rf.yyy)
+	// data := w.Bytes()
+	// rf.persister.SaveRaftState(data)
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(rf.currentTerm)
@@ -137,7 +149,7 @@ func (rf *Raft) persist() {
 	e.Encode(rf.lastIncludedTerm)
 	e.Encode(rf.lastIncludedIndex)
 	data := w.Bytes()
-	rf.persister.SaveRaftState(data)
+	return data
 }
 
 // restore previously persisted state.

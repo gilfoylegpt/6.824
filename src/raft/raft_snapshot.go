@@ -13,11 +13,10 @@ func (rf *Raft) SnapShot(snapshotIndex int, snapshotData []byte) {
 	rf.logEntries = newlog
 	rf.lastIncludedIndex = newlog[0].Index
 	rf.lastIncludedTerm = newlog[0].Term
-	rf.persist()
+	state := rf.prePersist()
+	rf.persister.SaveStateAndSnapshot(state, snapshotData)
 	DPrintf("[SNAPSHOT INFO]: raft server %d active snapshot current term %d lastIncludedIndex %d, len(logs) %d\n",
 		rf.me, rf.currentTerm, rf.lastIncludedIndex, len(rf.logEntries))
-	state := rf.persister.ReadRaftState()
-	rf.persister.SaveStateAndSnapshot(state, snapshotData)
 	isLeader := rf.state == Leader
 	rf.mu.Unlock()
 
@@ -129,12 +128,11 @@ func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 	rf.logEntries = newlog
 	rf.lastIncludedIndex = snapshotIndex
 	rf.lastIncludedTerm = snapshotTerm
-	rf.persist()
+	state := rf.prePersist()
+	rf.persister.SaveStateAndSnapshot(state, args.SnapshotData)
 	DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot current term %d lastIncludedIndex %d, len(logs) %d\n",
 		rf.me, rf.currentTerm, rf.lastIncludedIndex, len(rf.logEntries))
-	state := rf.persister.ReadRaftState()
 	rf.passiveSnapshotFlag = true
-	rf.persister.SaveStateAndSnapshot(state, args.SnapshotData)
 
 	applyMsg := ApplyMsg{
 		SnapshotValid: true,
