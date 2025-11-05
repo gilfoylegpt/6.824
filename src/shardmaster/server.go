@@ -195,9 +195,9 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
 func (sm *ShardMaster) Kill() {
+	atomic.StoreInt32(&sm.dead, 1)
 	sm.rf.Kill()
 	// Your code here, if desired.
-	atomic.StoreInt32(&sm.dead, 1)
 }
 
 func (sm *ShardMaster) killed() bool {
@@ -321,7 +321,8 @@ func shardLoadBalance(newgroups map[int][]string, originShard [NShards]int) [NSh
 	for i := 0; i < len(gids)-1; i++ {
 		for j := len(gids) - 1; j > i; j-- {
 			if shardCnt[gids[j]] > shardCnt[gids[j-1]] || (shardCnt[gids[j]] == shardCnt[gids[j-1]] && gids[j] < gids[j-1]) {
-				gids[j], gids[j-1] = gids[j-1], gids[j]
+				// gids[j], gids[j-1] = gids[j-1], gids[j]
+				gids[j-1], gids[j] = gids[j], gids[j-1]
 			}
 		}
 	}
@@ -339,7 +340,7 @@ func shardLoadBalance(newgroups map[int][]string, originShard [NShards]int) [NSh
 		}
 
 		if delta > 0 {
-			for j := 0; j < len(newShard); j++ {
+			for j := 0; j < NShards; j++ {
 				if delta == 0 {
 					break
 				}
@@ -365,7 +366,7 @@ func shardLoadBalance(newgroups map[int][]string, originShard [NShards]int) [NSh
 		}
 
 		if delta < 0 {
-			for j := 0; j < len(newShard); j++ {
+			for j := 0; j < NShards; j++ {
 				if delta == 0 {
 					break
 				}
@@ -396,19 +397,19 @@ func (sm *ShardMaster) executeMove(op Op) Err {
 }
 
 func deepCopyGroups(origin map[int][]string) map[int][]string {
-	new := map[int][]string{}
+	newMap := map[int][]string{}
 	for gid, servers := range origin {
 		copyServers := make([]string, len(servers))
 		copy(copyServers, servers)
-		new[gid] = copyServers
+		newMap[gid] = copyServers
 	}
 
-	return new
+	return newMap
 }
 
 func (sm *ShardMaster) executeQuery(op Op) (Err, Config) {
 	last := sm.getLatestConfig()
-	if op.CfgNum < 0 || op.CfgNum >= last.Num {
+	if op.CfgNum == -1 || op.CfgNum > last.Num {
 		return OK, last
 	}
 
@@ -422,6 +423,8 @@ func (sm *ShardMaster) executeQuery(op Op) (Err, Config) {
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister) *ShardMaster {
 	sm := new(ShardMaster)
 	sm.me = me
+	var mutex sync.Mutex
+	sm.mu = mutex
 
 	sm.configs = make([]Config, 1)
 	sm.configs[0].Groups = map[int][]string{}
