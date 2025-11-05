@@ -146,6 +146,7 @@ func (sm *ShardMaster) Move(args *MoveArgs, reply *MoveReply) {
 		op := Op{
 			ClientId:  args.ClientId,
 			ClientNum: args.ClientNum,
+			OpType:    Move,
 			Shard:     args.Shard,
 			GID:       args.GID,
 		}
@@ -171,6 +172,7 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 	op := Op{
 		ClientId:  args.ClientId,
 		ClientNum: args.ClientNum,
+		OpType:    Query,
 		CfgNum:    args.Num,
 	}
 	index, _, isLeader := sm.rf.Start(op)
