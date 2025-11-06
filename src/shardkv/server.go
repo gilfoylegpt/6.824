@@ -107,7 +107,7 @@ func (kv *ShardKV) checkKeyInGroup(key string) bool {
 func (kv *ShardKV) createNotifyChan(index int) chan Reply {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	kv.notifyChan[index] = make(chan Reply)
+	kv.notifyChan[index] = make(chan Reply, 1)
 	return kv.notifyChan[index]
 }
 
@@ -634,6 +634,7 @@ func (kv *ShardKV) applyMessage() {
 					kv.mu.Unlock()
 					continue
 				}
+				kv.passiveSnapshotBefore = false
 			}
 
 			kv.logLastApplied = msg.CommandIndex
