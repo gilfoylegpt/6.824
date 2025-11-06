@@ -285,9 +285,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	go kv.checkSnapshotNeed()
 
-	go kv.getLatestConfig() 
+	go kv.getLatestConfig()
 
-	go kv.checkGetShard() 
+	go kv.checkGetShard()
 
 	go kv.checkGiveShard()
 
@@ -354,16 +354,16 @@ func (kv *ShardKV) checkGetShard() {
 			continue
 		}
 
-		shards := []int{} 
+		shards := []int{}
 		kv.mu.Lock()
-		for i:=0; i < shardmaster.NShards; i++ {
+		for i := 0; i < shardmaster.NShards; i++ {
 			if kv.shardStates[i] == WaitGet {
 				shards = append(shards, i)
 			}
 		}
-		preConfig := kv.preConfig 
-		curCfgNum := kv.curConfig.Num 
-		kv.mu.Unlock() 
+		preConfig := kv.preConfig
+		curCfgNum := kv.curConfig.Num
+		kv.mu.Unlock()
 
 		var wg sync.WaitGroup
 		for _, shardNum := range shards {
@@ -375,8 +375,8 @@ func (kv *ShardKV) checkGetShard() {
 				defer wg.Done()
 
 				for _, server := range servers {
-					args := MigrateShardArgs {
-						CfgNum: cfgNum,
+					args := MigrateShardArgs{
+						CfgNum:   cfgNum,
 						ShardNum: shardNum,
 					}
 					reply := MigrateShardReply{}
@@ -391,11 +391,11 @@ func (kv *ShardKV) checkGetShard() {
 					}
 
 					if ok && reply.Err == OK {
-						op := Op {
-							OpType: GetShard,
-							CfgNum: cfgNum,
-							ShardNum: shardNum,
-							ShardData:  reply.ShardData,
+						op := Op{
+							OpType:       GetShard,
+							CfgNum:       cfgNum,
+							ShardNum:     shardNum,
+							ShardData:    reply.ShardData,
 							ShardSession: reply.SessionData,
 						}
 						kv.rf.Start(op)
@@ -412,18 +412,18 @@ func (kv *ShardKV) checkGetShard() {
 func (kv *ShardKV) MigrateShard(args *MigrateShardArgs, reply *MigrateShardReply) {
 	if _, isleader := kv.rf.GetState(); !isleader {
 		reply.Err = ErrWrongLeader
-		return 
+		return
 	}
 
-	kv.mu.Lock() 
-	defer kv.mu.Unlock() 
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	if kv.curConfig.Num < args.CfgNum {
 		reply.Err = ErrNotReady
-		return 
+		return
 	}
 
 	if kv.curConfig.Num > args.CfgNum {
-		return 
+		return
 	}
 
 	reply.Err = OK
@@ -449,7 +449,92 @@ func deepCopySession(origin map[int64]Session) map[int64]Session {
 }
 
 func (kv *ShardKV) checkGiveShard() {
+	for !kv.killed() {
+		if _, isLeader := kv.rf.GetState(); !isLeader {
+			time.Sleep(ConfigCheckInterval * time.Millisecond)
+			continue
+		}
 
+		shards := []int{}
+		kv.mu.Lock()
+		for i := 0; i < shardmaster.NShards; i++ {
+			if kv.shardStates[i] == WaitGive {
+				shards = append(shards, i)
+			}
+		}
+		curConfig := kv.curConfig
+		kv.mu.Unlock()
+
+		var wg sync.WaitGroup
+		for _, shardNum := range shards {
+			wg.Add(1)
+
+			curgid := curConfig.Shards[shardNum]
+			servers := curConfig.Groups[curgid]
+			go func(servers []string, cfgNum int, shardNum int) {
+				defer wg.Done()
+				for _, server := range servers {
+					args := AckShardArgs{
+						CfgNum:   cfgNum,
+						ShardNum: shardNum,
+					}
+					Reply := AckShardReply{}
+					srv := kv.make_end(server)
+					ok := srv.Call("ShardKV.AckShard", &args, &Reply)
+
+					if !ok || (ok && Reply.Err == ErrWrongLeader) {
+						continue
+					}
+
+					if ok && Reply.Err == ErrNotReady {
+						break
+					}
+
+					if ok && Reply.Err == OK && !Reply.Receive {
+						break
+					}
+
+					if ok && Reply.Err == OK && Reply.Receive {
+						op := Op{
+							OpType:   GiveShard,
+							CfgNum:   cfgNum,
+							ShardNum: shardNum,
+						}
+						kv.rf.Start(op)
+					}
+				}
+			}(servers, curConfig.Num, shardNum)
+		}
+		wg.Wait()
+		time.Sleep(ConfigCheckInterval * time.Millisecond)
+	}
+}
+
+func (kv *ShardKV) AckShard(args *AckShardArgs, reply *AckShardReply) {
+	if _, isLeader := kv.rf.GetState(); !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if kv.curConfig.Num < args.CfgNum {
+		reply.Err = ErrNotReady
+		return
+	}
+
+	if kv.curConfig.Num > args.CfgNum {
+		reply.Err = OK
+		reply.Receive = true
+		return
+	}
+
+	if kv.shardStates[args.ShardNum] == Exist {
+		reply.Receive = true
+	} else {
+		reply.Receive = false
+	}
+	reply.Err = OK
 }
 
 func (kv *ShardKV) getLatestConfig() {
