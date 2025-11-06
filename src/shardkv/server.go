@@ -18,7 +18,7 @@ const Debug = 1
 
 func Dprintf(format string, a ...interface{}) {
 	if Debug > 0 {
-		log.Printf(format, a)
+		log.Printf(format, a...)
 	}
 }
 
@@ -54,7 +54,7 @@ type Op struct {
 	OpType       string
 	Key          string
 	Value        string
-	Config       shardmaster.Config
+	NewConfig    shardmaster.Config
 	CfgNum       int
 	ShardNum     int
 	ShardData    map[string]string
@@ -344,7 +344,46 @@ func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
 }
 
 func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
+	switch op.OpType {
+	case UpdateConfig:
+		if op.CfgNum == kv.curConfig.Num+1 {
+			kv.updateConfig(op.NewConfig)
+		}
+	case GetShard:
+		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGet {
+			kv.kvdb[op.ShardNum] = deepCopyMap(op.ShardData)
+			kv.shardStates[op.ShardNum] = Exist
+			for cid, session := range op.ShardSession {
+				if s, ok := kv.sessions[cid]; !ok || s.ClientNum < session.ClientNum {
+					kv.sessions[cid] = session
+				}
+			}
+		}
+	case GiveShard:
+		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGive {
+			kv.shardStates[op.ShardNum] = NoExist
+			kv.kvdb[op.ShardNum] = map[string]string{}
+		}
+	}
+}
 
+func (kv *ShardKV) updateConfig(nextConfig shardmaster.Config) {
+	for shardNum, gid := range nextConfig.Shards {
+		if kv.shardStates[shardNum] == Exist && kv.gid != gid {
+			kv.shardStates[shardNum] = WaitGive
+		}
+
+		if kv.shardStates[shardNum] == NoExist && kv.gid == gid {
+			if nextConfig.Num == 1 {
+				kv.shardStates[shardNum] = Exist
+			} else {
+				kv.shardStates[shardNum] = WaitGet
+			}
+		}
+	}
+
+	kv.preConfig = kv.curConfig
+	kv.curConfig = nextConfig
 }
 
 func (kv *ShardKV) checkGetShard() {
@@ -556,9 +595,9 @@ func (kv *ShardKV) getLatestConfig() {
 
 		if nextConfig.Num == curConfig.Num+1 {
 			op := Op{
-				OpType: UpdateConfig,
-				Config: nextConfig,
-				CfgNum: nextConfig.Num,
+				OpType:    UpdateConfig,
+				NewConfig: nextConfig,
+				CfgNum:    nextConfig.Num,
 			}
 
 			kv.rf.Start(op)
@@ -572,7 +611,7 @@ func (kv *ShardKV) readyUpdateConfig() bool {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 	for i := 0; i < len(kv.shardStates); i++ {
-		if kv.shardStates[i] != Exist || kv.shardStates[i] != NoExist {
+		if kv.shardStates[i] != Exist && kv.shardStates[i] != NoExist {
 			return false
 		}
 	}
@@ -654,7 +693,7 @@ func (kv *ShardKV) checkSnapshotNeed() {
 		var snapshotIndex int
 		var snapshotData []byte
 		if kv.maxraftstate != -1 && float32(kv.rf.GetRaftStateSize())/float32(kv.maxraftstate) > 0.9 {
-			kv.mu.Unlock()
+			kv.mu.Lock()
 			snapshotIndex = kv.logLastApplied
 			b := new(bytes.Buffer)
 			e := labgob.NewEncoder(b)
