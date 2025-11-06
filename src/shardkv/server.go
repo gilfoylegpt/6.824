@@ -1,15 +1,75 @@
 package shardkv
 
 // import "mitds/shardmaster"
-import "mitds/labrpc"
-import "mitds/raft"
-import "sync"
-import "mitds/labgob"
+import (
+	"bytes"
+	"log"
+	"mitds/labgob"
+	"mitds/labrpc"
+	"mitds/raft"
+	"mitds/shardmaster"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+// Debugging
+const Debug = 1
+
+func Dprintf(format string, a ...interface{}) {
+	if Debug > 0 {
+		log.Printf(format, a)
+	}
+}
+
+const (
+	RespondTimeOut      = 500
+	ConfigCheckInterval = 100
+)
+
+const (
+	Get          = "Get"
+	Put          = "Put"
+	Append       = "Append"
+	UpdateConfig = "UpdateConfig"
+	GetShard     = "GetShard"
+	GiveShard    = "GiveShard"
+)
+
+type ShardState int
+
+const (
+	Exist ShardState = iota
+	NoExist
+	WaitGet
+	WaitGive
+)
 
 type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
+	ClientId     int64
+	ClientNum    int
+	OpType       string
+	Key          string
+	Value        string
+	Config       shardmaster.Config
+	CfgNum       int
+	ShardNum     int
+	ShardData    map[string]string
+	ShardSession map[int64]Session
+}
+
+type Session struct {
+	ClientNum int
+	Optype    string
+	Response  Reply
+}
+
+type Reply struct {
+	Err   Err
+	Value string
 }
 
 type ShardKV struct {
@@ -23,14 +83,127 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	dead                  int32
+	mck                   *shardmaster.Clerk
+	kvdb                  map[int]map[string]string
+	sessions              map[int64]Session
+	notifyChan            map[int]chan Reply
+	logLastApplied        int
+	passiveSnapshotBefore bool
+	shardStates           [shardmaster.NShards]ShardState
+	preConfig             shardmaster.Config
+	curConfig             shardmaster.Config
+}
+
+func (kv *ShardKV) checkKeyInGroup(key string) bool {
+	shard := key2shard(key)
+	if kv.shardStates[shard] != Exist {
+		return false
+	}
+
+	return true
+}
+
+func (kv *ShardKV) createNotifyChan(index int) chan Reply {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	kv.notifyChan[index] = make(chan Reply)
+	return kv.notifyChan[index]
+}
+
+func (kv *ShardKV) destroyNotifyChan(index int) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	if ch, ok := kv.notifyChan[index]; ok {
+		close(ch)
+		delete(kv.notifyChan, index)
+	}
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	// Your code here.
+	kv.mu.Lock()
+	if !kv.checkKeyInGroup(args.Key) {
+		reply.Err = ErrWrongGroup
+		kv.mu.Unlock()
+		return
+	}
+
+	kv.mu.Unlock()
+
+	op := Op{
+		ClientId:  args.ClientId,
+		ClientNum: args.ClientNum,
+		OpType:    Get,
+		Key:       args.Key,
+	}
+	index, _, isLeader := kv.rf.Start(op)
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	ch := kv.createNotifyChan(index)
+	select {
+	case res := <-ch:
+		kv.mu.Lock()
+		if !kv.checkKeyInGroup(args.Key) {
+			reply.Err = ErrWrongGroup
+		} else {
+			reply.Err = OK
+			reply.Value = res.Value
+		}
+		kv.mu.Unlock()
+	case <-time.After(RespondTimeOut * time.Millisecond):
+		reply.Err = ErrTimeOut
+	}
+	kv.destroyNotifyChan(index)
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	// Your code here.
+	kv.mu.Lock()
+	if !kv.checkKeyInGroup(args.Key) {
+		reply.Err = ErrWrongGroup
+		kv.mu.Unlock()
+		return
+	}
+
+	if session, ok := kv.sessions[args.ClientId]; ok && args.ClientNum <= session.ClientNum {
+		reply.Err = session.Response.Err
+		kv.mu.Unlock()
+		return
+	} else {
+		kv.mu.Unlock()
+
+		op := Op{
+			ClientId:  args.ClientId,
+			ClientNum: args.ClientNum,
+			OpType:    args.Op,
+			Key:       args.Key,
+			Value:     args.Value,
+		}
+		index, _, isLeader := kv.rf.Start(op)
+		if !isLeader {
+			reply.Err = ErrWrongLeader
+			return
+		}
+
+		ch := kv.createNotifyChan(index)
+		select {
+		case res := <-ch:
+			kv.mu.Lock()
+			if !kv.checkKeyInGroup(args.Key) {
+				reply.Err = ErrWrongGroup
+			} else {
+				reply.Err = res.Err
+			}
+			kv.mu.Unlock()
+		case <-time.After(RespondTimeOut * time.Millisecond):
+			reply.Err = ErrTimeOut
+		}
+		kv.destroyNotifyChan(index)
+	}
 }
 
 // the tester calls Kill() when a ShardKV instance won't
@@ -38,8 +211,14 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
 func (kv *ShardKV) Kill() {
+	atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
+}
+
+func (kv *ShardKV) killed() bool {
+	d := atomic.LoadInt32(&kv.dead)
+	return d == 1
 }
 
 // servers[] contains the ports of the servers in this group.
@@ -88,5 +267,172 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
+	kv.dead = 0
+	kv.mck = shardmaster.MakeClerk(kv.masters)
+	kv.kvdb = make(map[int]map[string]string)
+	for i := 0; i < shardmaster.NShards; i++ {
+		kv.kvdb[i] = make(map[string]string)
+	}
+	kv.sessions = make(map[int64]Session)
+	kv.notifyChan = make(map[int]chan Reply)
+
+	kv.logLastApplied = 0
+	kv.passiveSnapshotBefore = false
+	kv.preConfig = shardmaster.Config{}
+	kv.curConfig = shardmaster.Config{}
+
+	go kv.applyMessage()
+
+	go kv.checkSnapshotNeed()
+
 	return kv
+}
+
+func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
+	if !kv.checkKeyInGroup(op.Key) {
+		return 
+	}
+
+	reply := Reply{}
+	if session, ok := kv.sessions[op.ClientId]; ok && op.OpType != Get && op.ClientNum <= session.ClientNum {
+		reply.Err = session.Response.Err
+	} else {
+		shard := key2shard(op.Key)
+		switch op.OpType {
+		case Get:
+			if val, ok := kv.kvdb[shard][op.Key]; ok {
+				reply.Err = OK 
+				reply.Value = val 
+			} else {
+				reply.Err = ErrNoKey 
+				reply.Value = ""
+			}
+		case Put:
+			kv.kvdb[shard][op.Key] = op.Value
+			reply.Err = OK 
+		case Append:
+			if val, ok := kv.kvdb[shard][op.Key]; ok {
+				kv.kvdb[shard][op.Key] = val + op.Value
+				reply.Err = OK
+			} else {
+				kv.kvdb[shard][op.Key] = op.Value 
+				reply.Err = ErrNoKey
+			}
+		}
+
+		if op.OpType != Get {
+			session := Session {
+				ClientNum: op.ClientNum,
+				Optype: op.OpType,
+				Response: reply,
+			}
+			kv.sessions[op.ClientId] = session
+		}
+	}
+
+	if ch, ok := kv.notifyChan[index]; ok {
+		if t, isLeader := kv.rf.GetState(); isLeader && term == t {
+			ch <- reply
+		}
+	}
+}
+
+func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
+
+}
+
+func (kv *ShardKV) applyMessage() {
+	for !kv.killed() {
+		msg := <-kv.applyCh
+		if msg.CommandValid {
+			kv.mu.Lock()
+			if msg.CommandIndex <= kv.logLastApplied {
+				kv.mu.Unlock()
+				continue
+			}
+
+			if kv.passiveSnapshotBefore {
+				if msg.CommandIndex != kv.logLastApplied+1 {
+					kv.mu.Unlock()
+					continue
+				}
+			}
+
+			kv.logLastApplied = msg.CommandIndex
+			op, ok := msg.Command.(Op)
+			if ok {
+				switch op.OpType {
+				case Get, Put, Append:
+					kv.executeNormalComand(op, msg.CommandIndex, msg.CommandTerm)
+				case UpdateConfig, GetShard, GiveShard:
+					kv.executeConfigCommand(op, msg.CommandIndex, msg.CommandTerm)
+				}
+			}
+			kv.mu.Unlock()
+		} else if msg.SnapshotValid {
+			kv.mu.Lock()
+			kv.logLastApplied = msg.SnapshotIndex
+			kv.applySnapshotToSM(msg.SnapShotData)
+			kv.passiveSnapshotBefore = true
+			kv.mu.Unlock()
+			kv.rf.SetPassiveSnapshotFlag(false)
+		}
+	}
+}
+
+func (kv *ShardKV) applySnapshotToSM(data []byte) {
+	if data == nil || len(data) == 0 {
+		return
+	}
+
+	var kvdb map[int]map[string]string
+	var sessions map[int64]Session
+	var shardStates [shardmaster.NShards]ShardState
+	var preConfig shardmaster.Config
+	var curConfig shardmaster.Config
+	b := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(b)
+
+	if d.Decode(&kvdb) != nil || d.Decode(&sessions) != nil || d.Decode(&shardStates) != nil ||
+		d.Decode(&preConfig) != nil || d.Decode(&curConfig) != nil {
+		Dprintf("[SHARD KV ERROR]: applySnapshotToSM failed")
+	} else {
+		kv.kvdb = kvdb
+		kv.sessions = sessions
+		kv.shardStates = shardStates
+		kv.preConfig = preConfig
+		kv.curConfig = curConfig
+	}
+}
+
+func (kv *ShardKV) checkSnapshotNeed() {
+	for !kv.killed() {
+		if kv.rf.GetPassiveAndSetActiveFlag() {
+			time.Sleep(ConfigCheckInterval * time.Millisecond)
+			continue
+		}
+
+		var snapshotIndex int
+		var snapshotData []byte
+		if kv.maxraftstate != -1 && float32(kv.rf.GetRaftStateSize())/float32(kv.maxraftstate) > 0.9 {
+			kv.mu.Unlock()
+			snapshotIndex = kv.logLastApplied
+			b := new(bytes.Buffer)
+			e := labgob.NewEncoder(b)
+			e.Encode(kv.kvdb)
+			e.Encode(kv.sessions)
+			e.Encode(kv.shardStates)
+			e.Encode(kv.preConfig)
+			e.Encode(kv.curConfig)
+			snapshotData = b.Bytes()
+			kv.mu.Unlock()
+		}
+
+		if snapshotData != nil {
+			kv.rf.SnapShot(snapshotIndex, snapshotData)
+		}
+
+		kv.rf.SetActiveSnapshotFlag(false)
+		time.Sleep(ConfigCheckInterval * time.Millisecond)
+	}
 }
