@@ -15,7 +15,7 @@ const (
 	ErrWrongGroup  = "ErrWrongGroup"
 	ErrWrongLeader = "ErrWrongLeader"
 	ErrTimeOut     = "ErrTimeout"
-	ErrTimeOut     = "NotReady"
+	ErrNotReady    = "NotReady"
 )
 
 type Err string
@@ -47,4 +47,25 @@ type GetArgs struct {
 type GetReply struct {
 	Err   Err
 	Value string
+}
+
+type MigrateShardArgs struct {
+	CfgNum   int
+	ShardNum int
+}
+
+type MigrateShardReply struct {
+	Err         Err
+	ShardData   map[string]string
+	SessionData map[int64]Session
+}
+
+type AckShardArgs struct {
+	CfgNum   int
+	ShardNum int
+}
+
+type AckShardReply struct {
+	Err     Err
+	Receive bool
 }

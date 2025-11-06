@@ -285,12 +285,18 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	go kv.checkSnapshotNeed()
 
+	go kv.getLatestConfig() 
+
+	go kv.checkGetShard() 
+
+	go kv.checkGiveShard()
+
 	return kv
 }
 
 func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
 	if !kv.checkKeyInGroup(op.Key) {
-		return 
+		return
 	}
 
 	reply := Reply{}
@@ -301,30 +307,30 @@ func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
 		switch op.OpType {
 		case Get:
 			if val, ok := kv.kvdb[shard][op.Key]; ok {
-				reply.Err = OK 
-				reply.Value = val 
+				reply.Err = OK
+				reply.Value = val
 			} else {
-				reply.Err = ErrNoKey 
+				reply.Err = ErrNoKey
 				reply.Value = ""
 			}
 		case Put:
 			kv.kvdb[shard][op.Key] = op.Value
-			reply.Err = OK 
+			reply.Err = OK
 		case Append:
 			if val, ok := kv.kvdb[shard][op.Key]; ok {
 				kv.kvdb[shard][op.Key] = val + op.Value
 				reply.Err = OK
 			} else {
-				kv.kvdb[shard][op.Key] = op.Value 
+				kv.kvdb[shard][op.Key] = op.Value
 				reply.Err = ErrNoKey
 			}
 		}
 
 		if op.OpType != Get {
-			session := Session {
+			session := Session{
 				ClientNum: op.ClientNum,
-				Optype: op.OpType,
-				Response: reply,
+				Optype:    op.OpType,
+				Response:  reply,
 			}
 			kv.sessions[op.ClientId] = session
 		}
@@ -339,6 +345,154 @@ func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
 
 func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
 
+}
+
+func (kv *ShardKV) checkGetShard() {
+	for !kv.killed() {
+		if _, isLeader := kv.rf.GetState(); !isLeader {
+			time.Sleep(ConfigCheckInterval * time.Millisecond)
+			continue
+		}
+
+		shards := []int{} 
+		kv.mu.Lock()
+		for i:=0; i < shardmaster.NShards; i++ {
+			if kv.shardStates[i] == WaitGet {
+				shards = append(shards, i)
+			}
+		}
+		preConfig := kv.preConfig 
+		curCfgNum := kv.curConfig.Num 
+		kv.mu.Unlock() 
+
+		var wg sync.WaitGroup
+		for _, shardNum := range shards {
+			wg.Add(1)
+
+			pregid := preConfig.Shards[shardNum]
+			servers := preConfig.Groups[pregid]
+			go func(servers []string, cfgNum int, shardNum int) {
+				defer wg.Done()
+
+				for _, server := range servers {
+					args := MigrateShardArgs {
+						CfgNum: cfgNum,
+						ShardNum: shardNum,
+					}
+					reply := MigrateShardReply{}
+					srv := kv.make_end(server)
+					ok := srv.Call("ShardKV.MigrateShard", &args, &reply)
+					if !ok || (ok && reply.Err == ErrWrongLeader) {
+						continue
+					}
+
+					if ok && reply.Err == ErrNotReady {
+						break
+					}
+
+					if ok && reply.Err == OK {
+						op := Op {
+							OpType: GetShard,
+							CfgNum: cfgNum,
+							ShardNum: shardNum,
+							ShardData:  reply.ShardData,
+							ShardSession: reply.SessionData,
+						}
+						kv.rf.Start(op)
+						break
+					}
+				}
+			}(servers, curCfgNum, shardNum)
+		}
+		wg.Wait()
+		time.Sleep(ConfigCheckInterval * time.Millisecond)
+	}
+}
+
+func (kv *ShardKV) MigrateShard(args *MigrateShardArgs, reply *MigrateShardReply) {
+	if _, isleader := kv.rf.GetState(); !isleader {
+		reply.Err = ErrWrongLeader
+		return 
+	}
+
+	kv.mu.Lock() 
+	defer kv.mu.Unlock() 
+	if kv.curConfig.Num < args.CfgNum {
+		reply.Err = ErrNotReady
+		return 
+	}
+
+	if kv.curConfig.Num > args.CfgNum {
+		return 
+	}
+
+	reply.Err = OK
+	reply.ShardData = deepCopyMap(kv.kvdb[args.ShardNum])
+	reply.SessionData = deepCopySession(kv.sessions)
+}
+
+func deepCopyMap(origin map[string]string) map[string]string {
+	newmap := make(map[string]string)
+	for key, value := range origin {
+		newmap[key] = value
+	}
+	return newmap
+}
+
+func deepCopySession(origin map[int64]Session) map[int64]Session {
+	newsession := make(map[int64]Session)
+	for key, session := range origin {
+		newsession[key] = session
+	}
+
+	return newsession
+}
+
+func (kv *ShardKV) checkGiveShard() {
+
+}
+
+func (kv *ShardKV) getLatestConfig() {
+	for !kv.killed() {
+		if _, isLeader := kv.rf.GetState(); !isLeader {
+			time.Sleep(ConfigCheckInterval * time.Millisecond)
+			continue
+		}
+
+		if !kv.readyUpdateConfig() {
+			time.Sleep(ConfigCheckInterval * time.Millisecond)
+			continue
+		}
+
+		kv.mu.Lock()
+		curConfig := kv.curConfig
+		kv.mu.Unlock()
+		nextConfig := kv.mck.Query(curConfig.Num + 1)
+
+		if nextConfig.Num == curConfig.Num+1 {
+			op := Op{
+				OpType: UpdateConfig,
+				Config: nextConfig,
+				CfgNum: nextConfig.Num,
+			}
+
+			kv.rf.Start(op)
+		}
+
+		time.Sleep(ConfigCheckInterval * time.Millisecond)
+	}
+}
+
+func (kv *ShardKV) readyUpdateConfig() bool {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
+	for i := 0; i < len(kv.shardStates); i++ {
+		if kv.shardStates[i] != Exist || kv.shardStates[i] != NoExist {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (kv *ShardKV) applyMessage() {
