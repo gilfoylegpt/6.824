@@ -16,7 +16,7 @@ import (
 // Debugging
 const Debug = 1
 
-func Dprintf(format string, a ...interface{}) {
+func DPrintf(format string, a ...interface{}) {
 	if Debug > 0 {
 		log.Printf(format, a...)
 	}
@@ -97,11 +97,7 @@ type ShardKV struct {
 
 func (kv *ShardKV) checkKeyInGroup(key string) bool {
 	shard := key2shard(key)
-	if kv.shardStates[shard] != Exist {
-		return false
-	}
-
-	return true
+	return kv.shardStates[shard] == Exist
 }
 
 func (kv *ShardKV) createNotifyChan(index int) chan Reply {
@@ -166,6 +162,8 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if !kv.checkKeyInGroup(args.Key) {
 		reply.Err = ErrWrongGroup
 		kv.mu.Unlock()
+		DPrintf("[ShardKV INFO]: key %s shard %d not in group %d, shardStates %v\n",
+			args.Key, key2shard(args.Key), kv.gid, kv.shardStates)
 		return
 	}
 
@@ -189,6 +187,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			return
 		}
 
+		DPrintf("[SHARDKV INFO]: group %d leader receive PutAppend key %s from client %d\n", kv.gid, args.Key, args.ClientId)
 		ch := kv.createNotifyChan(index)
 		select {
 		case res := <-ch:
@@ -199,6 +198,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 				reply.Err = res.Err
 			}
 			kv.mu.Unlock()
+			DPrintf("[SHARDKV INFO]: group %d leader send reply err %s to client %d for key %s\n", kv.gid, reply.Err, args.ClientId, args.Key)
 		case <-time.After(RespondTimeOut * time.Millisecond):
 			reply.Err = ErrTimeOut
 		}
@@ -353,6 +353,7 @@ func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
 		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGet {
 			kv.kvdb[op.ShardNum] = deepCopyMap(op.ShardData)
 			kv.shardStates[op.ShardNum] = Exist
+			DPrintf("[SHARDKV INFO]: group %d got shard %d for config %d\n", kv.gid, op.ShardNum, op.CfgNum)
 			for cid, session := range op.ShardSession {
 				if s, ok := kv.sessions[cid]; !ok || s.ClientNum < session.ClientNum {
 					kv.sessions[cid] = session
@@ -362,15 +363,19 @@ func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
 	case GiveShard:
 		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGive {
 			kv.shardStates[op.ShardNum] = NoExist
+			DPrintf("[SHARDKV INFO]: group %d ack and remove shard %d for config %d\n", kv.gid, op.ShardNum, op.CfgNum)
 			kv.kvdb[op.ShardNum] = map[string]string{}
 		}
 	}
 }
 
 func (kv *ShardKV) updateConfig(nextConfig shardmaster.Config) {
+	need2give := []int{}
+	need2get := []int{}
 	for shardNum, gid := range nextConfig.Shards {
 		if kv.shardStates[shardNum] == Exist && kv.gid != gid {
 			kv.shardStates[shardNum] = WaitGive
+			need2give = append(need2give, shardNum)
 		}
 
 		if kv.shardStates[shardNum] == NoExist && kv.gid == gid {
@@ -378,12 +383,14 @@ func (kv *ShardKV) updateConfig(nextConfig shardmaster.Config) {
 				kv.shardStates[shardNum] = Exist
 			} else {
 				kv.shardStates[shardNum] = WaitGet
+				need2get = append(need2get, shardNum)
 			}
 		}
 	}
-
 	kv.preConfig = kv.curConfig
 	kv.curConfig = nextConfig
+	DPrintf("[SHARDKV INFO]: group %d updated to config %v, need to give %v, need to get %v\n",
+		kv.gid, kv.curConfig, need2give, need2get)
 }
 
 func (kv *ShardKV) checkGetShard() {
@@ -410,6 +417,7 @@ func (kv *ShardKV) checkGetShard() {
 
 			pregid := preConfig.Shards[shardNum]
 			servers := preConfig.Groups[pregid]
+			DPrintf("[SHARDKV INFO]: group %d need to get shard %d from group %d\n", kv.gid, shardNum, pregid)
 			go func(servers []string, cfgNum int, shardNum int) {
 				defer wg.Done()
 
@@ -510,6 +518,7 @@ func (kv *ShardKV) checkGiveShard() {
 
 			curgid := curConfig.Shards[shardNum]
 			servers := curConfig.Groups[curgid]
+			DPrintf("[ShardKV INFO]: group %d need to give shard %d to group %d\n", kv.gid, shardNum, curgid)
 			go func(servers []string, cfgNum int, shardNum int) {
 				defer wg.Done()
 				for _, server := range servers {
@@ -600,6 +609,7 @@ func (kv *ShardKV) getLatestConfig() {
 				CfgNum:    nextConfig.Num,
 			}
 
+			DPrintf("[SHARDKV INFO]: group %d try to update config %v\n", kv.gid, nextConfig)
 			kv.rf.Start(op)
 		}
 
@@ -674,7 +684,7 @@ func (kv *ShardKV) applySnapshotToSM(data []byte) {
 
 	if d.Decode(&kvdb) != nil || d.Decode(&sessions) != nil || d.Decode(&shardStates) != nil ||
 		d.Decode(&preConfig) != nil || d.Decode(&curConfig) != nil {
-		Dprintf("[SHARD KV ERROR]: applySnapshotToSM failed")
+		DPrintf("[SHARD KV ERROR]: applySnapshotToSM failed")
 	} else {
 		kv.kvdb = kvdb
 		kv.sessions = sessions
