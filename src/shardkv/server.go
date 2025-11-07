@@ -280,6 +280,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.passiveSnapshotBefore = false
 	kv.preConfig = shardmaster.Config{}
 	kv.curConfig = shardmaster.Config{}
+	for i := 0; i < shardmaster.NShards; i++ {
+		kv.shardStates[i] = NoExist
+	}
 
 	go kv.applyMessage()
 
