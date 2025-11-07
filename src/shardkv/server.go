@@ -187,7 +187,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			return
 		}
 
-		DPrintf("[SHARDKV INFO]: group %d leader receive PutAppend key %s from client %d\n", kv.gid, args.Key, args.ClientId)
+		// DPrintf("[SHARDKV INFO]: group %d leader receive PutAppend key %s from client %d\n", kv.gid, args.Key, args.ClientId)
 		ch := kv.createNotifyChan(index)
 		select {
 		case res := <-ch:
@@ -198,7 +198,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 				reply.Err = res.Err
 			}
 			kv.mu.Unlock()
-			DPrintf("[SHARDKV INFO]: group %d leader send reply err %s to client %d for key %s\n", kv.gid, reply.Err, args.ClientId, args.Key)
+			// DPrintf("[SHARDKV INFO]: group %d leader send reply err %s to client %d for key %s\n", kv.gid, reply.Err, args.ClientId, args.Key)
 		case <-time.After(RespondTimeOut * time.Millisecond):
 			reply.Err = ErrTimeOut
 		}
@@ -294,7 +294,25 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	go kv.checkGiveShard()
 
+	go kv.checkShardStates()
+
 	return kv
+}
+
+func (kv *ShardKV) checkShardStates() {
+	for !kv.killed() {
+		kv.mu.Lock()
+		for i := 0; i < shardmaster.NShards; i++ {
+			if kv.shardStates[i] == Exist && len(kv.kvdb[i]) == 0 && kv.curConfig.Num > 1 {
+				kv.shardStates[i] = NoExist
+			}
+			if kv.shardStates[i] == NoExist && len(kv.kvdb[i]) != 0 {
+				kv.shardStates[i] = Exist
+			}
+		}
+		kv.mu.Unlock()
+		time.Sleep(ConfigCheckInterval / 2 * time.Millisecond)
+	}
 }
 
 func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
@@ -420,7 +438,8 @@ func (kv *ShardKV) checkGetShard() {
 
 			pregid := preConfig.Shards[shardNum]
 			servers := preConfig.Groups[pregid]
-			DPrintf("[SHARDKV INFO]: group %d need to get shard %d from group %d\n", kv.gid, shardNum, pregid)
+			DPrintf("[SHARDKV INFO]: group %d need to get shard %d from group %d preconfig %d curconfig %d\n",
+				kv.gid, shardNum, pregid, preConfig.Num, curCfgNum)
 			go func(servers []string, cfgNum int, shardNum int) {
 				defer wg.Done()
 
@@ -521,7 +540,7 @@ func (kv *ShardKV) checkGiveShard() {
 
 			curgid := curConfig.Shards[shardNum]
 			servers := curConfig.Groups[curgid]
-			DPrintf("[ShardKV INFO]: group %d need to give shard %d to group %d\n", kv.gid, shardNum, curgid)
+			DPrintf("[SHARDKV INFO]: group %d need to give shard %d to group %d curconfig %d\n", kv.gid, shardNum, curgid, curConfig.Num)
 			go func(servers []string, cfgNum int, shardNum int) {
 				defer wg.Done()
 				for _, server := range servers {
@@ -725,6 +744,6 @@ func (kv *ShardKV) checkSnapshotNeed() {
 		}
 
 		kv.rf.SetActiveSnapshotFlag(false)
-		time.Sleep(ConfigCheckInterval * time.Millisecond)
+		time.Sleep(ConfigCheckInterval / 2 * time.Millisecond)
 	}
 }

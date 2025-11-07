@@ -195,6 +195,7 @@ func (cfg *config) ShutdownGroup(gi int) {
 	for i := 0; i < cfg.n; i++ {
 		cfg.ShutdownServer(gi, i)
 	}
+	DPrintf("[TEST INFO]: group %d shutdown\n", gi)
 }
 
 // start i'th server in gi'th group
@@ -262,6 +263,7 @@ func (cfg *config) StartGroup(gi int) {
 	for i := 0; i < cfg.n; i++ {
 		cfg.StartServer(gi, i)
 	}
+	DPrintf("[TEST INFO]: group %d start\n", gi)
 }
 
 func (cfg *config) StartMasterServer(i int) {
