@@ -371,7 +371,7 @@ func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
 			kv.updateConfig(op.NewConfig)
 		}
 	case GetShard:
-		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGet {
+		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGet && len(kv.kvdb[op.ShardNum]) == 0 {
 			kv.kvdb[op.ShardNum] = deepCopyMap(op.ShardData)
 			kv.shardStates[op.ShardNum] = Exist
 			DPrintf("[SHARDKV INFO]: group %d got shard %d for config %d\n", kv.gid, op.ShardNum, op.CfgNum)
@@ -382,7 +382,7 @@ func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
 			}
 		}
 	case GiveShard:
-		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGive {
+		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGive && len(kv.kvdb[op.ShardNum]) > 0 {
 			kv.shardStates[op.ShardNum] = NoExist
 			DPrintf("[SHARDKV INFO]: group %d ack and remove shard %d for config %d\n", kv.gid, op.ShardNum, op.CfgNum)
 			kv.kvdb[op.ShardNum] = map[string]string{}
@@ -395,16 +395,24 @@ func (kv *ShardKV) updateConfig(nextConfig shardmaster.Config) {
 	need2get := []int{}
 	for shardNum, gid := range nextConfig.Shards {
 		if kv.shardStates[shardNum] == Exist && kv.gid != gid {
-			kv.shardStates[shardNum] = WaitGive
-			need2give = append(need2give, shardNum)
+			if len(kv.kvdb[shardNum]) == 0 {
+				kv.shardStates[shardNum] = NoExist
+			} else {
+				kv.shardStates[shardNum] = WaitGive
+				need2give = append(need2give, shardNum)
+			}
 		}
 
 		if kv.shardStates[shardNum] == NoExist && kv.gid == gid {
 			if nextConfig.Num == 1 {
 				kv.shardStates[shardNum] = Exist
 			} else {
-				kv.shardStates[shardNum] = WaitGet
-				need2get = append(need2get, shardNum)
+				if len(kv.kvdb[shardNum]) > 0 {
+					kv.shardStates[shardNum] = Exist
+				} else {
+					kv.shardStates[shardNum] = WaitGet
+					need2get = append(need2get, shardNum)
+				}
 			}
 		}
 	}
@@ -425,7 +433,11 @@ func (kv *ShardKV) checkGetShard() {
 		kv.mu.Lock()
 		for i := 0; i < shardmaster.NShards; i++ {
 			if kv.shardStates[i] == WaitGet {
-				shards = append(shards, i)
+				if len(kv.kvdb[i]) > 0 {
+					kv.shardStates[i] = Exist
+				} else {
+					shards = append(shards, i)
+				}
 			}
 		}
 		preConfig := kv.preConfig
@@ -528,7 +540,11 @@ func (kv *ShardKV) checkGiveShard() {
 		kv.mu.Lock()
 		for i := 0; i < shardmaster.NShards; i++ {
 			if kv.shardStates[i] == WaitGive {
-				shards = append(shards, i)
+				if len(kv.kvdb[i]) == 0 {
+					kv.shardStates[i] = NoExist
+				} else {
+					shards = append(shards, i)
+				}
 			}
 		}
 		curConfig := kv.curConfig
@@ -644,6 +660,14 @@ func (kv *ShardKV) readyUpdateConfig() bool {
 	defer kv.mu.Unlock()
 	for i := 0; i < len(kv.shardStates); i++ {
 		if kv.shardStates[i] != Exist && kv.shardStates[i] != NoExist {
+			return false
+		}
+		if kv.shardStates[i] == Exist && len(kv.kvdb[i]) == 0 && kv.curConfig.Num > 1 {
+			kv.shardStates[i] = NoExist
+			return false
+		}
+		if kv.shardStates[i] == NoExist && len(kv.kvdb[i]) > 0 {
+			kv.shardStates[i] = Exist
 			return false
 		}
 	}
