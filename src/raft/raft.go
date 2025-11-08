@@ -190,7 +190,8 @@ func (rf *Raft) applier() {
 func (rf *Raft) CheckRebootRecovery() bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	return rf.commitedIndex > 0 && rf.lastAppliedIndex == rf.commitedIndex
+
+	return rf.lastAppliedIndex == rf.commitedIndex
 }
 
 func (rf *Raft) handleTimeout() {
