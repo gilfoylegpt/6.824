@@ -286,7 +286,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.applyMessage()
 
 	// time.Sleep(2 * time.Second)
-	kv.checkRecovery()
+	// kv.checkRecovery()
 
 	go kv.checkSnapshotNeed()
 
