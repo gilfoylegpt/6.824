@@ -243,13 +243,13 @@ func (sm *ShardMaster) applyConfigChange() {
 						sm.sessions[op.ClientId] = session
 					}
 				}
-
-				if ch, ok := sm.notifyChan[msg.CommandIndex]; ok {
+				ch, ok := sm.notifyChan[msg.CommandIndex]
+				sm.mu.Unlock()
+				if ok {
 					if term, isLeader := sm.rf.GetState(); isLeader && term == msg.CommandTerm {
 						ch <- reply
 					}
 				}
-				sm.mu.Unlock()
 			}
 		}
 	}

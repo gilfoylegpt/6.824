@@ -328,7 +328,9 @@ func (kv *ShardKV) checkShardStates() {
 }
 
 func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
+	kv.mu.Lock()
 	if !kv.checkKeyInGroup(op.Key) {
+		kv.mu.Unlock()
 		return
 	}
 
@@ -368,8 +370,10 @@ func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
 			kv.sessions[op.ClientId] = session
 		}
 	}
+	ch, ok := kv.notifyChan[index]
+	kv.mu.Unlock()
 
-	if ch, ok := kv.notifyChan[index]; ok {
+	if ok {
 		if t, isLeader := kv.rf.GetState(); isLeader && term == t {
 			ch <- reply
 		}
@@ -377,6 +381,8 @@ func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
 }
 
 func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
+	kv.mu.Lock()
+	defer kv.mu.Unlock()
 	switch op.OpType {
 	case UpdateConfig:
 		if op.CfgNum == kv.curConfig.Num+1 {
@@ -712,6 +718,7 @@ func (kv *ShardKV) applyMessage() {
 			}
 
 			kv.logLastApplied = msg.CommandIndex
+			kv.mu.Unlock()
 			op, ok := msg.Command.(Op)
 			if ok {
 				switch op.OpType {
@@ -721,7 +728,6 @@ func (kv *ShardKV) applyMessage() {
 					kv.executeConfigCommand(op, msg.CommandIndex, msg.CommandTerm)
 				}
 			}
-			kv.mu.Unlock()
 		} else if msg.SnapshotValid {
 			kv.mu.Lock()
 			kv.logLastApplied = msg.SnapshotIndex

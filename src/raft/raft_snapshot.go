@@ -79,7 +79,6 @@ func (rf *Raft) leaderSendSnapshot(idx int, snapshotData []byte) {
 
 func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotReply) {
 	rf.mu.Lock()
-	defer rf.mu.Unlock()
 	if args.Term < rf.currentTerm || rf.activeSnapshotFlag || rf.passiveSnapshotFlag {
 		reply.Term = rf.currentTerm
 		reply.Accept = false
@@ -89,6 +88,7 @@ func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 		if rf.passiveSnapshotFlag {
 			DPrintf("[SNAPSHOT WARNING]: raft server %d is going on passive snapshot so won't do another passive snapshot before previous is done\n", rf.me)
 		}
+		rf.mu.Unlock()
 		return
 	}
 
@@ -105,6 +105,7 @@ func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 	reply.Term = rf.currentTerm
 	if snapshotIndex <= rf.lastIncludedIndex {
 		reply.Accept = false
+		rf.mu.Unlock()
 		return
 	}
 
@@ -133,6 +134,7 @@ func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 	DPrintf("[SNAPSHOT INFO]: raft server %d passive snapshot current term %d lastIncludedIndex %d, len(logs) %d\n",
 		rf.me, rf.currentTerm, rf.lastIncludedIndex, len(rf.logEntries))
 	rf.passiveSnapshotFlag = true
+	rf.mu.Unlock()
 
 	applyMsg := ApplyMsg{
 		SnapshotValid: true,
@@ -141,6 +143,9 @@ func (rf *Raft) CondSnapshot(args *InstallSnapShotArgs, reply *InstallSnapShotRe
 		SnapShotData:  args.SnapshotData,
 	}
 	rf.applyCh <- applyMsg
+	// go func(msg ApplyMsg) {
+	// 	rf.applyCh <- msg
+	// }(applyMsg)
 	reply.Accept = true
 	return
 }
