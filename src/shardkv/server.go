@@ -162,8 +162,8 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if !kv.checkKeyInGroup(args.Key) {
 		reply.Err = ErrWrongGroup
 		kv.mu.Unlock()
-		DPrintf("[ShardKV INFO]: key %s shard %d not in group %d, shardStates %v\n",
-			args.Key, key2shard(args.Key), kv.gid, kv.shardStates)
+		DPrintf("[ShardKV INFO]: key %s shard %d not in group %d, shardStates %v preConfig %d curConfig %d\n",
+			args.Key, key2shard(args.Key), kv.gid, kv.shardStates, kv.preConfig.Num, kv.curConfig.Num)
 		return
 	}
 
@@ -285,7 +285,8 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	go kv.applyMessage()
 
-	time.Sleep(2 * time.Second)
+	// time.Sleep(2 * time.Second)
+	kv.checkRecovery()
 
 	go kv.checkSnapshotNeed()
 
@@ -298,6 +299,16 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.checkShardStates()
 
 	return kv
+}
+
+func (kv *ShardKV) checkRecovery() {
+	n := 0
+	for n < 3 {
+		if kv.rf.CheckRebootRecovery() {
+			n++
+		}
+		time.Sleep(ConfigCheckInterval * time.Millisecond)
+	}
 }
 
 func (kv *ShardKV) checkShardStates() {
