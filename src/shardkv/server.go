@@ -516,6 +516,7 @@ func (kv *ShardKV) MigrateShard(args *MigrateShardArgs, reply *MigrateShardReply
 	}
 
 	if kv.curConfig.Num > args.CfgNum {
+		reply.Err = ErrNotReady
 		return
 	}
 
@@ -622,12 +623,11 @@ func (kv *ShardKV) AckShard(args *AckShardArgs, reply *AckShardReply) {
 	}
 
 	if kv.curConfig.Num > args.CfgNum {
-		reply.Err = OK
-		reply.Receive = true
+		reply.Err = ErrNotReady
 		return
 	}
 
-	if kv.shardStates[args.ShardNum] == Exist {
+	if kv.shardStates[args.ShardNum] == Exist && len(kv.kvdb[args.ShardNum]) > 0 {
 		reply.Receive = true
 	} else {
 		reply.Receive = false
