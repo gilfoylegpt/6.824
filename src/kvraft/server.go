@@ -182,9 +182,11 @@ func (kv *KVServer) applyMessage() {
 			}
 
 			kv.lastAppliedOpIndex = applyMsg.CommandIndex
+			kv.mu.Unlock()
 			op, ok := applyMsg.Command.(Op)
 			if ok {
 				var reply Reply
+				kv.mu.Lock()
 				if session, ok := kv.sessions[op.ClientId]; ok && op.OpType != "Get" && op.CommandNum <= session.LastCommandNum {
 					reply = session.Response
 				} else {
@@ -226,14 +228,14 @@ func (kv *KVServer) applyMessage() {
 						}
 					}
 				}
-
-				if ch, ok := kv.notifyChannel[applyMsg.CommandIndex]; ok {
+				ch, ok := kv.notifyChannel[applyMsg.CommandIndex]
+				kv.mu.Unlock()
+				if ok {
 					if term, isLeader := kv.rf.GetState(); isLeader && term == applyMsg.CommandTerm {
 						ch <- reply
 					}
 				}
 			}
-			kv.mu.Unlock()
 		} else if applyMsg.SnapshotValid {
 			kv.mu.Lock()
 			kv.lastAppliedOpIndex = applyMsg.SnapshotIndex
