@@ -260,13 +260,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.masters = masters
 
 	// Your initialization code here.
-
-	// Use something like this to talk to the shardmaster:
-	// kv.mck = shardmaster.MakeClerk(kv.masters)
-
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
 	kv.dead = 0
 	kv.mck = shardmaster.MakeClerk(kv.masters)
 	kv.kvdb = make(map[int]map[string]string)
@@ -284,7 +277,15 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 		kv.shardStates[i] = NoExist
 	}
 
+	// Use something like this to talk to the shardmaster:
+	// kv.mck = shardmaster.MakeClerk(kv.masters)
+
+	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+
 	go kv.applyMessage()
+
+	time.Sleep(2 * time.Second)
 
 	go kv.checkSnapshotNeed()
 
