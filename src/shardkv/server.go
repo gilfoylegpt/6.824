@@ -516,12 +516,18 @@ func (kv *ShardKV) MigrateShard(args *MigrateShardArgs, reply *MigrateShardReply
 	}
 
 	if kv.curConfig.Num > args.CfgNum {
+		reply.Err = ErrNotReady
 		return
 	}
 
-	reply.Err = OK
-	reply.ShardData = deepCopyMap(kv.kvdb[args.ShardNum])
-	reply.SessionData = deepCopySession(kv.sessions)
+	if kv.shardStates[args.ShardNum] != NoExist && len(kv.kvdb[args.ShardNum]) > 0 {
+		reply.Err = OK
+		reply.ShardData = deepCopyMap(kv.kvdb[args.ShardNum])
+		reply.SessionData = deepCopySession(kv.sessions)
+	} else {
+		reply.Err = ErrNotReady
+		return
+	}
 }
 
 func deepCopyMap(origin map[string]string) map[string]string {
