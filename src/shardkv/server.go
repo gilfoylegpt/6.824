@@ -16,7 +16,7 @@ import (
 // Debugging
 const Debug = 1
 
-func Dprintf(format string, a ...interface{}) {
+func DPrintf(format string, a ...interface{}) {
 	if Debug > 0 {
 		log.Printf(format, a...)
 	}
@@ -97,11 +97,7 @@ type ShardKV struct {
 
 func (kv *ShardKV) checkKeyInGroup(key string) bool {
 	shard := key2shard(key)
-	if kv.shardStates[shard] != Exist {
-		return false
-	}
-
-	return true
+	return kv.shardStates[shard] == Exist
 }
 
 func (kv *ShardKV) createNotifyChan(index int) chan Reply {
@@ -150,7 +146,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		if !kv.checkKeyInGroup(args.Key) {
 			reply.Err = ErrWrongGroup
 		} else {
-			reply.Err = OK
+			reply.Err = res.Err
 			reply.Value = res.Value
 		}
 		kv.mu.Unlock()
@@ -166,6 +162,8 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	if !kv.checkKeyInGroup(args.Key) {
 		reply.Err = ErrWrongGroup
 		kv.mu.Unlock()
+		DPrintf("[ShardKV INFO]: key %s shard %d not in group %d, shardStates %v preConfig %d curConfig %d\n",
+			args.Key, key2shard(args.Key), kv.gid, kv.shardStates, kv.preConfig.Num, kv.curConfig.Num)
 		return
 	}
 
@@ -189,6 +187,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 			return
 		}
 
+		// DPrintf("[SHARDKV INFO]: group %d leader receive PutAppend key %s from client %d\n", kv.gid, args.Key, args.ClientId)
 		ch := kv.createNotifyChan(index)
 		select {
 		case res := <-ch:
@@ -199,6 +198,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 				reply.Err = res.Err
 			}
 			kv.mu.Unlock()
+			// DPrintf("[SHARDKV INFO]: group %d leader send reply err %s to client %d for key %s\n", kv.gid, reply.Err, args.ClientId, args.Key)
 		case <-time.After(RespondTimeOut * time.Millisecond):
 			reply.Err = ErrTimeOut
 		}
@@ -260,13 +260,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.masters = masters
 
 	// Your initialization code here.
-
-	// Use something like this to talk to the shardmaster:
-	// kv.mck = shardmaster.MakeClerk(kv.masters)
-
-	kv.applyCh = make(chan raft.ApplyMsg)
-	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
-
 	kv.dead = 0
 	kv.mck = shardmaster.MakeClerk(kv.masters)
 	kv.kvdb = make(map[int]map[string]string)
@@ -280,8 +273,20 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.passiveSnapshotBefore = false
 	kv.preConfig = shardmaster.Config{}
 	kv.curConfig = shardmaster.Config{}
+	for i := 0; i < shardmaster.NShards; i++ {
+		kv.shardStates[i] = NoExist
+	}
+
+	// Use something like this to talk to the shardmaster:
+	// kv.mck = shardmaster.MakeClerk(kv.masters)
+
+	kv.applyCh = make(chan raft.ApplyMsg)
+	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	go kv.applyMessage()
+
+	// time.Sleep(2 * time.Second)
+	// kv.checkRecovery()
 
 	go kv.checkSnapshotNeed()
 
@@ -291,7 +296,35 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	go kv.checkGiveShard()
 
+	// go kv.checkShardStates()
+
 	return kv
+}
+
+func (kv *ShardKV) checkRecovery() {
+	n := 0
+	for n < 3 {
+		if kv.rf.CheckRebootRecovery() {
+			n++
+		}
+		time.Sleep(ConfigCheckInterval * time.Millisecond)
+	}
+}
+
+func (kv *ShardKV) checkShardStates() {
+	for !kv.killed() {
+		kv.mu.Lock()
+		for i := 0; i < shardmaster.NShards; i++ {
+			if kv.shardStates[i] == Exist && len(kv.kvdb[i]) == 0 && kv.curConfig.Num > 1 {
+				kv.shardStates[i] = NoExist
+			}
+			if kv.shardStates[i] == NoExist && len(kv.kvdb[i]) != 0 {
+				kv.shardStates[i] = Exist
+			}
+		}
+		kv.mu.Unlock()
+		time.Sleep(ConfigCheckInterval / 2 * time.Millisecond)
+	}
 }
 
 func (kv *ShardKV) executeNormalComand(op Op, index int, term int) {
@@ -350,9 +383,10 @@ func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
 			kv.updateConfig(op.NewConfig)
 		}
 	case GetShard:
-		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGet {
+		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGet { //&& len(kv.kvdb[op.ShardNum]) == 0 {
 			kv.kvdb[op.ShardNum] = deepCopyMap(op.ShardData)
 			kv.shardStates[op.ShardNum] = Exist
+			DPrintf("[SHARDKV INFO]: group %d got shard %d for config %d\n", kv.gid, op.ShardNum, op.CfgNum)
 			for cid, session := range op.ShardSession {
 				if s, ok := kv.sessions[cid]; !ok || s.ClientNum < session.ClientNum {
 					kv.sessions[cid] = session
@@ -360,30 +394,65 @@ func (kv *ShardKV) executeConfigCommand(op Op, index int, term int) {
 			}
 		}
 	case GiveShard:
-		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGive {
+		if op.CfgNum == kv.curConfig.Num && kv.shardStates[op.ShardNum] == WaitGive { //&& len(kv.kvdb[op.ShardNum]) > 0 {
 			kv.shardStates[op.ShardNum] = NoExist
+			DPrintf("[SHARDKV INFO]: group %d ack and remove shard %d for config %d\n", kv.gid, op.ShardNum, op.CfgNum)
 			kv.kvdb[op.ShardNum] = map[string]string{}
 		}
 	}
 }
 
 func (kv *ShardKV) updateConfig(nextConfig shardmaster.Config) {
+	need2give := []int{}
+	need2get := []int{}
 	for shardNum, gid := range nextConfig.Shards {
 		if kv.shardStates[shardNum] == Exist && kv.gid != gid {
+			// if len(kv.kvdb[shardNum]) == 0 {
+			// kv.shardStates[shardNum] = NoExist
+			// } else {
 			kv.shardStates[shardNum] = WaitGive
+			need2give = append(need2give, shardNum)
+			// }
 		}
 
 		if kv.shardStates[shardNum] == NoExist && kv.gid == gid {
 			if nextConfig.Num == 1 {
 				kv.shardStates[shardNum] = Exist
 			} else {
+				// if len(kv.kvdb[shardNum]) > 0 {
+				// kv.shardStates[shardNum] = Exist
+				// } else {
 				kv.shardStates[shardNum] = WaitGet
+				need2get = append(need2get, shardNum)
+				// }
 			}
 		}
 	}
+	// kv.preConfig = kv.curConfig
+	// kv.curConfig = nextConfig
+	if nextConfig.Num > 1 {
+		deepCopyConfig(&kv.preConfig, &kv.curConfig)
+	}
+	deepCopyConfig(&kv.curConfig, &nextConfig)
+	DPrintf("[SHARDKV INFO]: group %d updated to config %v, need to give %v, need to get %v\n",
+		kv.gid, kv.curConfig, need2give, need2get)
+}
 
-	kv.preConfig = kv.curConfig
-	kv.curConfig = nextConfig
+func deepCopyConfig(to *shardmaster.Config, from *shardmaster.Config) {
+	to.Num = from.Num
+	to.Shards = from.Shards
+	to.Groups = deepCopyGroups(from.Groups)
+}
+
+func deepCopyGroups(origin map[int][]string) map[int][]string {
+	newMap := map[int][]string{}
+	for gid, servers := range origin {
+		copyServers := make([]string, len(servers))
+		copy(copyServers, servers)
+		newMap[gid] = copyServers
+	}
+
+	return newMap
 }
 
 func (kv *ShardKV) checkGetShard() {
@@ -397,10 +466,16 @@ func (kv *ShardKV) checkGetShard() {
 		kv.mu.Lock()
 		for i := 0; i < shardmaster.NShards; i++ {
 			if kv.shardStates[i] == WaitGet {
+				// if len(kv.kvdb[i]) > 0 {
+				// kv.shardStates[i] = Exist
+				// } else {
 				shards = append(shards, i)
+				// }
 			}
 		}
-		preConfig := kv.preConfig
+		// preConfig := kv.preConfig
+		preConfig := shardmaster.Config{}
+		deepCopyConfig(&preConfig, &kv.preConfig)
 		curCfgNum := kv.curConfig.Num
 		kv.mu.Unlock()
 
@@ -410,6 +485,8 @@ func (kv *ShardKV) checkGetShard() {
 
 			pregid := preConfig.Shards[shardNum]
 			servers := preConfig.Groups[pregid]
+			DPrintf("[SHARDKV INFO]: group %d need to get shard %d from group %d preconfig %d curconfig %d\n",
+				kv.gid, shardNum, pregid, preConfig.Num, curCfgNum)
 			go func(servers []string, cfgNum int, shardNum int) {
 				defer wg.Done()
 
@@ -462,12 +539,18 @@ func (kv *ShardKV) MigrateShard(args *MigrateShardArgs, reply *MigrateShardReply
 	}
 
 	if kv.curConfig.Num > args.CfgNum {
+		// reply.Err = ErrNotReady
 		return
 	}
 
+	// if kv.shardStates[args.ShardNum] != NoExist && len(kv.kvdb[args.ShardNum]) > 0 {
 	reply.Err = OK
 	reply.ShardData = deepCopyMap(kv.kvdb[args.ShardNum])
 	reply.SessionData = deepCopySession(kv.sessions)
+	// } else {
+	// 	reply.Err = ErrNotReady
+	// 	return
+	// }
 }
 
 func deepCopyMap(origin map[string]string) map[string]string {
@@ -498,10 +581,16 @@ func (kv *ShardKV) checkGiveShard() {
 		kv.mu.Lock()
 		for i := 0; i < shardmaster.NShards; i++ {
 			if kv.shardStates[i] == WaitGive {
+				// if len(kv.kvdb[i]) == 0 {
+				// kv.shardStates[i] = NoExist
+				// } else {
 				shards = append(shards, i)
+				// }
 			}
 		}
-		curConfig := kv.curConfig
+		// curConfig := kv.curConfig
+		curConfig := shardmaster.Config{}
+		deepCopyConfig(&curConfig, &kv.curConfig)
 		kv.mu.Unlock()
 
 		var wg sync.WaitGroup
@@ -510,6 +599,7 @@ func (kv *ShardKV) checkGiveShard() {
 
 			curgid := curConfig.Shards[shardNum]
 			servers := curConfig.Groups[curgid]
+			DPrintf("[SHARDKV INFO]: group %d need to give shard %d to group %d curconfig %d\n", kv.gid, shardNum, curgid, curConfig.Num)
 			go func(servers []string, cfgNum int, shardNum int) {
 				defer wg.Done()
 				for _, server := range servers {
@@ -568,7 +658,7 @@ func (kv *ShardKV) AckShard(args *AckShardArgs, reply *AckShardReply) {
 		return
 	}
 
-	if kv.shardStates[args.ShardNum] == Exist {
+	if kv.shardStates[args.ShardNum] == Exist { // && len(kv.kvdb[args.ShardNum]) > 0 {
 		reply.Receive = true
 	} else {
 		reply.Receive = false
@@ -589,7 +679,9 @@ func (kv *ShardKV) getLatestConfig() {
 		}
 
 		kv.mu.Lock()
-		curConfig := kv.curConfig
+		// curConfig := kv.curConfig
+		curConfig := shardmaster.Config{}
+		deepCopyConfig(&curConfig, &kv.curConfig)
 		kv.mu.Unlock()
 		nextConfig := kv.mck.Query(curConfig.Num + 1)
 
@@ -600,6 +692,7 @@ func (kv *ShardKV) getLatestConfig() {
 				CfgNum:    nextConfig.Num,
 			}
 
+			DPrintf("[SHARDKV INFO]: group %d try to update config %v\n", kv.gid, nextConfig)
 			kv.rf.Start(op)
 		}
 
@@ -610,10 +703,18 @@ func (kv *ShardKV) getLatestConfig() {
 func (kv *ShardKV) readyUpdateConfig() bool {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	for i := 0; i < len(kv.shardStates); i++ {
+	for i := 0; i < shardmaster.NShards; i++ {
 		if kv.shardStates[i] != Exist && kv.shardStates[i] != NoExist {
 			return false
 		}
+		// if kv.shardStates[i] == Exist && len(kv.kvdb[i]) == 0 && kv.curConfig.Num > 1 {
+		// 	kv.shardStates[i] = NoExist
+		// 	return false
+		// }
+		// if kv.shardStates[i] == NoExist && len(kv.kvdb[i]) > 0 {
+		// 	kv.shardStates[i] = Exist
+		// 	return false
+		// }
 	}
 
 	return true
@@ -669,18 +770,22 @@ func (kv *ShardKV) applySnapshotToSM(data []byte) {
 	var shardStates [shardmaster.NShards]ShardState
 	var preConfig shardmaster.Config
 	var curConfig shardmaster.Config
+	var passiveSnapshotBefore bool
 	b := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(b)
 
 	if d.Decode(&kvdb) != nil || d.Decode(&sessions) != nil || d.Decode(&shardStates) != nil ||
-		d.Decode(&preConfig) != nil || d.Decode(&curConfig) != nil {
-		Dprintf("[SHARD KV ERROR]: applySnapshotToSM failed")
+		d.Decode(&preConfig) != nil || d.Decode(&curConfig) != nil || d.Decode(&passiveSnapshotBefore) != nil {
+		DPrintf("[SHARD KV ERROR]: applySnapshotToSM failed")
 	} else {
 		kv.kvdb = kvdb
 		kv.sessions = sessions
 		kv.shardStates = shardStates
-		kv.preConfig = preConfig
-		kv.curConfig = curConfig
+		// kv.preConfig = preConfig
+		// kv.curConfig = curConfig
+		deepCopyConfig(&kv.preConfig, &preConfig)
+		deepCopyConfig(&kv.curConfig, &curConfig)
+		kv.passiveSnapshotBefore = passiveSnapshotBefore
 	}
 }
 
@@ -703,6 +808,7 @@ func (kv *ShardKV) checkSnapshotNeed() {
 			e.Encode(kv.shardStates)
 			e.Encode(kv.preConfig)
 			e.Encode(kv.curConfig)
+			e.Encode(kv.passiveSnapshotBefore)
 			snapshotData = b.Bytes()
 			kv.mu.Unlock()
 		}
@@ -712,6 +818,6 @@ func (kv *ShardKV) checkSnapshotNeed() {
 		}
 
 		kv.rf.SetActiveSnapshotFlag(false)
-		time.Sleep(ConfigCheckInterval * time.Millisecond)
+		time.Sleep(ConfigCheckInterval / 2 * time.Millisecond)
 	}
 }

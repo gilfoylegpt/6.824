@@ -187,6 +187,13 @@ func (rf *Raft) applier() {
 	}
 }
 
+func (rf *Raft) CheckRebootRecovery() bool {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	return rf.lastAppliedIndex == rf.commitedIndex
+}
+
 func (rf *Raft) handleTimeout() {
 	for !rf.killed() {
 		select {

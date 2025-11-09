@@ -195,6 +195,7 @@ func (cfg *config) ShutdownGroup(gi int) {
 	for i := 0; i < cfg.n; i++ {
 		cfg.ShutdownServer(gi, i)
 	}
+	DPrintf("[TEST INFO]: group %d shutdown\n", gi)
 }
 
 // start i'th server in gi'th group
@@ -262,6 +263,7 @@ func (cfg *config) StartGroup(gi int) {
 	for i := 0; i < cfg.n; i++ {
 		cfg.StartServer(gi, i)
 	}
+	DPrintf("[TEST INFO]: group %d start\n", gi)
 }
 
 func (cfg *config) StartMasterServer(i int) {
@@ -302,6 +304,7 @@ func (cfg *config) shardclerk() *shardmaster.Clerk {
 // tell the shardmaster that a group is joining.
 func (cfg *config) join(gi int) {
 	cfg.joinm([]int{gi})
+	DPrintf("[TEST INFO]: group %d join\n", gi)
 }
 
 func (cfg *config) joinm(gis []int) {
@@ -320,6 +323,7 @@ func (cfg *config) joinm(gis []int) {
 // tell the shardmaster that a group is leaving.
 func (cfg *config) leave(gi int) {
 	cfg.leavem([]int{gi})
+	DPrintf("[TEST INFO]: group %d leave\n", gi)
 }
 
 func (cfg *config) leavem(gis []int) {

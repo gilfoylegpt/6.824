@@ -58,7 +58,7 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	// You'll have to add code here.
 	ck.config = ck.sm.Query(-1)
 	ck.clientId = nrand()
-	ck.clientNum = 1 
+	ck.clientNum = 1
 	return ck
 }
 
@@ -69,7 +69,7 @@ func MakeClerk(masters []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 func (ck *Clerk) Get(key string) string {
 	args := GetArgs{}
 	args.Key = key
-	args.ClientId = ck.clientId 
+	args.ClientId = ck.clientId
 	args.ClientNum = ck.clientNum
 
 	for {
@@ -113,11 +113,13 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		if servers, ok := ck.config.Groups[gid]; ok {
+			// DPrintf("[SHARDKV INFO]: client %d PutAppend key %s to group %d\n", ck.clientId, key, gid)
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					// DPrintf("[SHARDKV INFO]: client %d PutAppend key %s to group %d success\n", ck.clientId, key, gid)
 					ck.clientNum++
 					return
 				}
