@@ -5,7 +5,6 @@ import (
 	"mitds/labrpc"
 	"mitds/raft"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -197,14 +196,15 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
 func (sm *ShardMaster) Kill() {
-	atomic.StoreInt32(&sm.dead, 1)
+	// atomic.StoreInt32(&sm.dead, 1)
 	sm.rf.Kill()
 	// Your code here, if desired.
 }
 
 func (sm *ShardMaster) killed() bool {
-	d := atomic.LoadInt32(&sm.dead)
-	return d == 1
+	// d := atomic.LoadInt32(&sm.dead)
+	// return d == 1
+	return sm.rf.RaftKilled()
 }
 
 // needed by shardkv tester
