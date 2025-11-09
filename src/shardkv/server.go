@@ -728,10 +728,12 @@ func (kv *ShardKV) applyMessage() {
 					kv.executeConfigCommand(op, msg.CommandIndex, msg.CommandTerm)
 				}
 			}
+			DPrintf("[SHARDKV DBG]: group %d apply message index %d\n", kv.gid, msg.CommandIndex)
 		} else if msg.SnapshotValid {
 			kv.mu.Lock()
 			kv.logLastApplied = msg.SnapshotIndex
 			kv.applySnapshotToSM(msg.SnapShotData)
+			DPrintf("[SHARDKV DBG]: group %d passive install snapshot from index %d\n", kv.gid, msg.SnapshotIndex)
 			kv.passiveSnapshotBefore = true
 			kv.mu.Unlock()
 			kv.rf.SetPassiveSnapshotFlag(false)
@@ -789,6 +791,7 @@ func (kv *ShardKV) checkSnapshotNeed() {
 
 		if snapshotData != nil {
 			kv.rf.SnapShot(snapshotIndex, snapshotData)
+			DPrintf("[SHARDKV DBG]: group %d do active snapshot index %d\n", kv.gid, snapshotIndex)
 		}
 
 		kv.rf.SetActiveSnapshotFlag(false)

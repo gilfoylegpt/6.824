@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"log"
 	"mitds/labrpc"
 	"sync"
 	"time"
@@ -181,6 +182,7 @@ func (rf *Raft) applier() {
 
 		if needApply {
 			rf.applyCh <- applyMsg
+			log.Printf("[SHARDKV DBG]: raft server %d apply message index %v\n", rf.me, applyMsg.CommandIndex)
 		} else {
 			time.Sleep(10 * time.Millisecond)
 		}
