@@ -428,10 +428,31 @@ func (kv *ShardKV) updateConfig(nextConfig shardmaster.Config) {
 			}
 		}
 	}
-	kv.preConfig = kv.curConfig
-	kv.curConfig = nextConfig
+	// kv.preConfig = kv.curConfig
+	// kv.curConfig = nextConfig
+	if nextConfig.Num > 1 {
+		deepCopyConfig(&kv.preConfig, &kv.curConfig)
+	}
+	deepCopyConfig(&kv.curConfig, &nextConfig)
 	DPrintf("[SHARDKV INFO]: group %d updated to config %v, need to give %v, need to get %v\n",
 		kv.gid, kv.curConfig, need2give, need2get)
+}
+
+func deepCopyConfig(to *shardmaster.Config, from *shardmaster.Config) {
+	to.Num = from.Num
+	to.Shards = from.Shards
+	to.Groups = deepCopyGroups(from.Groups)
+}
+
+func deepCopyGroups(origin map[int][]string) map[int][]string {
+	newMap := map[int][]string{}
+	for gid, servers := range origin {
+		copyServers := make([]string, len(servers))
+		copy(copyServers, servers)
+		newMap[gid] = copyServers
+	}
+
+	return newMap
 }
 
 func (kv *ShardKV) checkGetShard() {
@@ -754,8 +775,10 @@ func (kv *ShardKV) applySnapshotToSM(data []byte) {
 		kv.kvdb = kvdb
 		kv.sessions = sessions
 		kv.shardStates = shardStates
-		kv.preConfig = preConfig
-		kv.curConfig = curConfig
+		// kv.preConfig = preConfig
+		// kv.curConfig = curConfig
+		deepCopyConfig(&kv.preConfig, &preConfig)
+		deepCopyConfig(&kv.curConfig, &curConfig)
 		kv.passiveSnapshotBefore = passiveSnapshotBefore
 	}
 }
