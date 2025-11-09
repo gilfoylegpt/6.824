@@ -9,6 +9,7 @@ import (
 	"mitds/raft"
 	"mitds/shardmaster"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -463,6 +464,7 @@ func (kv *ShardKV) checkGetShard() {
 		kv.mu.Unlock()
 
 		var wg sync.WaitGroup
+		var waitTime int32 = 0
 		for _, shardNum := range shards {
 			wg.Add(1)
 
@@ -486,6 +488,7 @@ func (kv *ShardKV) checkGetShard() {
 					}
 
 					if ok && reply.Err == ErrNotReady {
+						atomic.AddInt32(&waitTime, ConfigCheckInterval)
 						break
 					}
 
@@ -504,7 +507,10 @@ func (kv *ShardKV) checkGetShard() {
 			}(servers, curCfgNum, shardNum)
 		}
 		wg.Wait()
-		time.Sleep(ConfigCheckInterval * time.Millisecond)
+		if waitTime > 5*ConfigCheckInterval {
+			waitTime = 5 * ConfigCheckInterval
+		}
+		time.Sleep(time.Duration(waitTime) * time.Millisecond)
 	}
 }
 
@@ -522,7 +528,7 @@ func (kv *ShardKV) MigrateShard(args *MigrateShardArgs, reply *MigrateShardReply
 	}
 
 	if kv.curConfig.Num > args.CfgNum {
-		// reply.Err = ErrNotReady
+		reply.Err = ErrNotReady
 		return
 	}
 
@@ -575,6 +581,7 @@ func (kv *ShardKV) checkGiveShard() {
 		kv.mu.Unlock()
 
 		var wg sync.WaitGroup
+		var waitTime int32 = 0
 		for _, shardNum := range shards {
 			wg.Add(1)
 
@@ -597,6 +604,7 @@ func (kv *ShardKV) checkGiveShard() {
 					}
 
 					if ok && Reply.Err == ErrNotReady {
+						atomic.AddInt32(&waitTime, ConfigCheckInterval)
 						break
 					}
 
@@ -616,7 +624,10 @@ func (kv *ShardKV) checkGiveShard() {
 			}(servers, curConfig.Num, shardNum)
 		}
 		wg.Wait()
-		time.Sleep(ConfigCheckInterval * time.Millisecond)
+		if waitTime > 5*ConfigCheckInterval {
+			waitTime = 5 * ConfigCheckInterval
+		}
+		time.Sleep(time.Duration(waitTime) * time.Millisecond)
 	}
 }
 
@@ -655,7 +666,7 @@ func (kv *ShardKV) getLatestConfig() {
 		}
 
 		if !kv.readyUpdateConfig() {
-			time.Sleep(ConfigCheckInterval * time.Millisecond)
+			time.Sleep(2 * ConfigCheckInterval * time.Millisecond)
 			continue
 		}
 
