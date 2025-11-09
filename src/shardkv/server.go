@@ -473,7 +473,9 @@ func (kv *ShardKV) checkGetShard() {
 				// }
 			}
 		}
-		preConfig := kv.preConfig
+		// preConfig := kv.preConfig
+		preConfig := shardmaster.Config{}
+		deepCopyConfig(&preConfig, &kv.preConfig)
 		curCfgNum := kv.curConfig.Num
 		kv.mu.Unlock()
 
@@ -586,7 +588,9 @@ func (kv *ShardKV) checkGiveShard() {
 				// }
 			}
 		}
-		curConfig := kv.curConfig
+		// curConfig := kv.curConfig
+		curConfig := shardmaster.Config{}
+		deepCopyConfig(&curConfig, &kv.curConfig)
 		kv.mu.Unlock()
 
 		var wg sync.WaitGroup
@@ -675,7 +679,9 @@ func (kv *ShardKV) getLatestConfig() {
 		}
 
 		kv.mu.Lock()
-		curConfig := kv.curConfig
+		// curConfig := kv.curConfig
+		curConfig := shardmaster.Config{}
+		deepCopyConfig(&curConfig, &kv.curConfig)
 		kv.mu.Unlock()
 		nextConfig := kv.mck.Query(curConfig.Num + 1)
 
