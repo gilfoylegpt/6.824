@@ -78,28 +78,28 @@ type Raft struct {
 	passiveSnapshotFlag bool
 }
 
-func (rf *Raft) SetPassiveSnapshotFlag (flag bool ) {
+func (rf *Raft) SetPassiveSnapshotFlag(flag bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.passiveSnapshotFlag = flag 
+	rf.passiveSnapshotFlag = flag
 }
 
-func (rf *Raft) SetActiveSnapshotFlag (flag bool) {
+func (rf *Raft) SetActiveSnapshotFlag(flag bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	rf.activeSnapshotFlag = flag
 }
 
-func (rf *Raft) GetPassiveAndSetActiveFlag () bool {
+func (rf *Raft) GetPassiveAndSetActiveFlag() bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if !rf.passiveSnapshotFlag {
-		rf.activeSnapshotFlag = true 
+		rf.activeSnapshotFlag = true
 	}
-	return rf.passiveSnapshotFlag 
+	return rf.passiveSnapshotFlag
 }
 
-func (rf *Raft) GetRaftStateSize () int {
+func (rf *Raft) GetRaftStateSize() int {
 	return rf.persister.RaftStateSize()
 }
 
@@ -132,7 +132,7 @@ func (rf *Raft) persist() {
 	rf.persister.SaveRaftState(rf.prePersist())
 }
 
-func (rf *Raft) prePersist() []byte{
+func (rf *Raft) prePersist() []byte {
 	// Your code here (2C).
 	// Example:
 	// w := new(bytes.Buffer)
@@ -175,12 +175,12 @@ func (rf *Raft) readPersist(data []byte) {
 	var currentTerm int
 	var voteFor int
 	var logEntries []LogEntry
-	var lastIncludedTerm int 
-	var lastIncludedIndex int 
+	var lastIncludedTerm int
+	var lastIncludedIndex int
 	if d.Decode(&currentTerm) != nil ||
 		d.Decode(&voteFor) != nil ||
 		d.Decode(&logEntries) != nil ||
-		d.Decode(&lastIncludedTerm) != nil || 
+		d.Decode(&lastIncludedTerm) != nil ||
 		d.Decode(&lastIncludedIndex) != nil {
 		DPrintf("[PERSIST ERROR]: raft server %d readPersist error\n", rf.me)
 	} else {
@@ -204,6 +204,10 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) Kill() {
 	atomic.StoreInt32(&rf.dead, 1)
 	// Your code here, if desired.
+}
+
+func (rf *Raft) RaftKilled() bool {
+	return rf.killed()
 }
 
 func (rf *Raft) killed() bool {

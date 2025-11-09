@@ -9,7 +9,6 @@ import (
 	"mitds/raft"
 	"mitds/shardmaster"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -211,14 +210,15 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
 func (kv *ShardKV) Kill() {
-	atomic.StoreInt32(&kv.dead, 1)
+	// atomic.StoreInt32(&kv.dead, 1)
 	kv.rf.Kill()
 	// Your code here, if desired.
 }
 
 func (kv *ShardKV) killed() bool {
-	d := atomic.LoadInt32(&kv.dead)
-	return d == 1
+	// d := atomic.LoadInt32(&kv.dead)
+	// return d == 1
+	return kv.rf.RaftKilled()
 }
 
 // servers[] contains the ports of the servers in this group.
