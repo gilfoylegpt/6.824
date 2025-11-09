@@ -146,7 +146,7 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 		if !kv.checkKeyInGroup(args.Key) {
 			reply.Err = ErrWrongGroup
 		} else {
-			reply.Err = OK
+			reply.Err = res.Err
 			reply.Value = res.Value
 		}
 		kv.mu.Unlock()
@@ -413,6 +413,14 @@ func (kv *ShardKV) updateConfig(nextConfig shardmaster.Config) {
 	need2give := []int{}
 	need2get := []int{}
 	for shardNum, gid := range nextConfig.Shards {
+		if kv.shardStates[shardNum] == WaitGive {
+			kv.shardStates[shardNum] = Exist
+		}
+
+		if kv.shardStates[shardNum] == WaitGet {
+			kv.shardStates[shardNum] = NoExist
+		}
+
 		if kv.shardStates[shardNum] == Exist && kv.gid != gid {
 			// if len(kv.kvdb[shardNum]) == 0 {
 			// kv.shardStates[shardNum] = NoExist
@@ -435,10 +443,29 @@ func (kv *ShardKV) updateConfig(nextConfig shardmaster.Config) {
 			}
 		}
 	}
-	kv.preConfig = kv.curConfig
-	kv.curConfig = nextConfig
+	if nextConfig.Num > 1 {
+		deepCopyConfig(&kv.curConfig, &kv.preConfig)
+	}
+	deepCopyConfig(&nextConfig, &kv.curConfig)
 	DPrintf("[SHARDKV INFO]: group %d updated to config %v, need to give %v, need to get %v\n",
 		kv.gid, kv.curConfig, need2give, need2get)
+}
+
+func deepCopyConfig(from *shardmaster.Config, to *shardmaster.Config) {
+	to.Num = from.Num
+	to.Shards = from.Shards
+	to.Groups = deepCopyGroups(from.Groups)
+}
+
+func deepCopyGroups(origin map[int][]string) map[int][]string {
+	newMap := map[int][]string{}
+	for gid, servers := range origin {
+		copyServers := make([]string, len(servers))
+		copy(copyServers, servers)
+		newMap[gid] = copyServers
+	}
+
+	return newMap
 }
 
 func (kv *ShardKV) checkGetShard() {
@@ -507,8 +534,8 @@ func (kv *ShardKV) checkGetShard() {
 			}(servers, curCfgNum, shardNum)
 		}
 		wg.Wait()
-		if waitTime > 5*ConfigCheckInterval {
-			waitTime = 5 * ConfigCheckInterval
+		if waitTime > 2*ConfigCheckInterval {
+			waitTime = 2 * ConfigCheckInterval
 		}
 		time.Sleep(time.Duration(waitTime) * time.Millisecond)
 	}
@@ -624,8 +651,8 @@ func (kv *ShardKV) checkGiveShard() {
 			}(servers, curConfig.Num, shardNum)
 		}
 		wg.Wait()
-		if waitTime > 5*ConfigCheckInterval {
-			waitTime = 5 * ConfigCheckInterval
+		if waitTime > 2*ConfigCheckInterval {
+			waitTime = 2 * ConfigCheckInterval
 		}
 		time.Sleep(time.Duration(waitTime) * time.Millisecond)
 	}
