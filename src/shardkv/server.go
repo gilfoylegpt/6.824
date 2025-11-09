@@ -693,7 +693,7 @@ func (kv *ShardKV) getLatestConfig() {
 func (kv *ShardKV) readyUpdateConfig() bool {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
-	for i := 0; i < len(kv.shardStates); i++ {
+	for i := 0; i < shardmaster.NShards; i++ {
 		if kv.shardStates[i] != Exist && kv.shardStates[i] != NoExist {
 			return false
 		}
@@ -762,11 +762,12 @@ func (kv *ShardKV) applySnapshotToSM(data []byte) {
 	var shardStates [shardmaster.NShards]ShardState
 	var preConfig shardmaster.Config
 	var curConfig shardmaster.Config
+	var passiveSnapshotBefore bool
 	b := bytes.NewBuffer(data)
 	d := labgob.NewDecoder(b)
 
 	if d.Decode(&kvdb) != nil || d.Decode(&sessions) != nil || d.Decode(&shardStates) != nil ||
-		d.Decode(&preConfig) != nil || d.Decode(&curConfig) != nil {
+		d.Decode(&preConfig) != nil || d.Decode(&curConfig) != nil || d.Decode(&passiveSnapshotBefore) != nil {
 		DPrintf("[SHARD KV ERROR]: applySnapshotToSM failed")
 	} else {
 		kv.kvdb = kvdb
@@ -774,6 +775,7 @@ func (kv *ShardKV) applySnapshotToSM(data []byte) {
 		kv.shardStates = shardStates
 		kv.preConfig = preConfig
 		kv.curConfig = curConfig
+		kv.passiveSnapshotBefore = passiveSnapshotBefore
 	}
 }
 
@@ -796,6 +798,7 @@ func (kv *ShardKV) checkSnapshotNeed() {
 			e.Encode(kv.shardStates)
 			e.Encode(kv.preConfig)
 			e.Encode(kv.curConfig)
+			e.Encode(kv.passiveSnapshotBefore)
 			snapshotData = b.Bytes()
 			kv.mu.Unlock()
 		}
